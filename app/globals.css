@@ -437,6 +437,84 @@ button:disabled {
   background: #ffffff;
 }
 
+.calendar-total-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  gap: 10px;
+  border-top: 1px solid #edf0ee;
+  padding-top: 10px;
+}
+
+.calendar-total-summary {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  border: 1px solid #d9dfdc;
+  border-radius: 6px;
+  background: #f8fbf9;
+  padding: 12px;
+}
+
+.calendar-total-summary span {
+  color: #617069;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.calendar-total-summary strong {
+  color: #17211c;
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+.calendar-daily-total-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-content: flex-start;
+}
+
+.calendar-daily-total-row {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #d9dfdc;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 8px 10px;
+  color: #17211c;
+}
+
+.calendar-daily-total-row[aria-current="date"] {
+  border-color: #265f47;
+  box-shadow: 0 0 0 3px rgba(47, 111, 84, 0.12);
+}
+
+.calendar-daily-total-row span {
+  color: #617069;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.calendar-daily-total-row strong {
+  color: #17211c;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.calendar-total-empty {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  color: #617069;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .dealer-summary {
   display: grid;
   min-height: 54px;
@@ -921,6 +999,18 @@ button:disabled {
 
   .calendar-day {
     min-height: 42px;
+  }
+
+  .calendar-total-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .calendar-daily-total-list {
+    flex-direction: column;
+  }
+
+  .calendar-daily-total-row {
+    width: 100%;
   }
 
   .order-info-band,

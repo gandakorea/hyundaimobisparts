@@ -205,6 +205,12 @@ function moveMonth(monthKey: string, amount: number) {
   return formatMonthKey(nextMonth.getFullYear(), nextMonth.getMonth() + 1);
 }
 
+function formatDailyTotalDate(dateText: string) {
+  const { month, day } = safeDateParts(dateText);
+
+  return `${month}월 ${day}일`;
+}
+
 function makeOrderInfo(): OrderInfo {
   return {
     date: todayInSeoul(),
@@ -385,8 +391,6 @@ function totalPrice(unitPrice: string, quantity: number) {
 
 function sectionTotalAmount(rows: OrderRow[]) {
   return rows.reduce((total, row) => {
-    if (row.status !== "found") return total;
-
     return total + (parseWon(row.price) ?? 0);
   }, 0);
 }
@@ -680,6 +684,20 @@ function dealersFromSections(sections: DealerSection[]) {
   return sections.map(dealerInfoFromSection).filter(isDealerInfo);
 }
 
+function savedRowsTotalAmount(rows: SavedOrderRow[] | undefined) {
+  return (
+    rows?.reduce((total, row) => {
+      return total + (parseWon(stringValue(row.price)) ?? 0);
+    }, 0) ?? 0
+  );
+}
+
+function savedSectionsTotalAmount(savedSections: SavedDealerSection[] | undefined) {
+  return (
+    savedSections?.reduce((total, section) => total + savedRowsTotalAmount(section.rows), 0) ?? 0
+  );
+}
+
 export default function Home() {
   const [orderDate, setOrderDate] = useState(todayInSeoul);
   const [sections, setSections] = useState<DealerSection[]>([makeDealerSection()]);
@@ -835,6 +853,31 @@ export default function Home() {
 
     return [...years].sort((left, right) => left - right);
   }, [calendarParts.year, dailyOrders, orderDate]);
+
+  const dailyOrdersWithCurrentDate = useMemo(
+    () => ({
+      ...dailyOrders,
+      [orderDate]: makeDailySnapshot(sections),
+    }),
+    [dailyOrders, orderDate, sections],
+  );
+
+  const calendarDailyTotals = useMemo(
+    () =>
+      Object.entries(dailyOrdersWithCurrentDate)
+        .filter(([date, order]) => date.startsWith(calendarMonth) && hasSavedRows(order.sections))
+        .map(([date, order]) => ({
+          date,
+          total: savedSectionsTotalAmount(order.sections),
+        }))
+        .sort((left, right) => left.date.localeCompare(right.date)),
+    [calendarMonth, dailyOrdersWithCurrentDate],
+  );
+
+  const calendarMonthTotal = useMemo(
+    () => calendarDailyTotals.reduce((total, item) => total + item.total, 0),
+    [calendarDailyTotals],
+  );
 
   const grandTotal = useMemo(
     () => sections.reduce((total, section) => total + sectionTotalAmount(section.rows), 0),
@@ -1373,6 +1416,30 @@ export default function Home() {
                     <span aria-hidden="true" className="calendar-day empty" key={`empty-${index}`} />
                   ),
                 )}
+              </div>
+              <div className="calendar-total-panel" aria-label="월별 합계">
+                <div className="calendar-total-summary">
+                  <span>월 누적 합계</span>
+                  <strong>{formatWon(calendarMonthTotal)}</strong>
+                </div>
+                <div className="calendar-daily-total-list">
+                  {calendarDailyTotals.length > 0 ? (
+                    calendarDailyTotals.map((item) => (
+                      <button
+                        aria-current={item.date === orderDate ? "date" : undefined}
+                        className="calendar-daily-total-row"
+                        key={item.date}
+                        type="button"
+                        onClick={() => changeOrderDate(item.date)}
+                      >
+                        <span>{formatDailyTotalDate(item.date)}</span>
+                        <strong>{formatWon(item.total)}</strong>
+                      </button>
+                    ))
+                  ) : (
+                    <span className="calendar-total-empty">이 달에 누적된 금액이 없습니다.</span>
+                  )}
+                </div>
               </div>
             </section>
 
