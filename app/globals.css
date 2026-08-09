@@ -1,27 +1,180 @@
-@import "tailwindcss";
-
 :root {
   --background: #f5f7f6;
   --foreground: #17211c;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+* {
+  box-sizing: border-box;
 }
 
 body {
+  margin: 0;
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+h1,
+p {
+  margin: 0;
 }
 
 button,
 input,
 select {
   font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: #f5f7f6;
+  color: #17211c;
+}
+
+.app-container {
+  display: flex;
+  min-height: 100vh;
+  width: 100%;
+  max-width: 1280px;
+  flex-direction: column;
+  gap: 24px;
+  margin: 0 auto;
+  padding: 20px 24px 32px;
+}
+
+.app-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid #d9dfdc;
+  padding-bottom: 20px;
+}
+
+.app-title-block {
+  min-width: 0;
+}
+
+.app-kicker {
+  color: #617069;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.app-title {
+  margin-top: 8px;
+  color: #121916;
+  font-size: 38px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.18;
+}
+
+.app-subtitle {
+  max-width: 680px;
+  margin-top: 12px;
+  color: #526058;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.order-workspace {
+  display: grid;
+  gap: 16px;
+}
+
+.order-card {
+  overflow: hidden;
+  border: 1px solid #d9dfdc;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 1px 5px rgba(23, 33, 28, 0.08);
+}
+
+.order-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #e3e8e5;
+  padding: 12px;
+}
+
+.order-toolbar-title {
+  color: #2d3b34;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.order-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.order-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+}
+
+.table-header-row {
+  background: #eef2ef;
+  color: #617069;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.order-row {
+  border-top: 1px solid #edf0ee;
+}
+
+.part-column {
+  width: 220px;
+}
+
+.quantity-column {
+  width: 86px;
+}
+
+.confirm-column {
+  width: 88px;
+}
+
+.price-column {
+  width: 150px;
+}
+
+.status-column {
+  width: 88px;
+}
+
+.delete-column {
+  width: 68px;
+}
+
+.delete-cell {
+  text-align: right;
+}
+
+.part-number-field {
+  font-family: var(--font-geist-mono), Consolas, monospace;
+  font-size: 13px;
 }
 
 .table-head {
@@ -48,6 +201,10 @@ select {
 .field:focus {
   border-color: #2f6f54;
   box-shadow: 0 0 0 3px rgba(47, 111, 84, 0.14);
+}
+
+.order-date-control .field {
+  width: 190px;
 }
 
 .quantity-select {
@@ -99,14 +256,14 @@ select {
 }
 
 .order-date-band {
-  grid-template-columns: auto auto;
+  display: flex;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .order-date-control {
-  display: grid;
+  display: inline-flex;
   min-height: 40px;
-  grid-template-columns: auto 190px;
   align-items: center;
   gap: 8px;
   color: #617069;
@@ -576,6 +733,53 @@ select {
 }
 
 @media (max-width: 760px) {
+  .app-container {
+    padding: 16px 12px 24px;
+  }
+
+  .app-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .app-title {
+    font-size: 30px;
+  }
+
+  .order-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .order-toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .order-date-band {
+    align-items: stretch;
+    flex-direction: column;
+    justify-items: stretch;
+  }
+
+  .order-date-control {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .order-date-control .field {
+    width: 100%;
+  }
+
+  .grand-total-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .grand-total-amount {
+    width: 100%;
+  }
+
   .order-info-band,
   .dealer-form-grid,
   .fax-preview-panel {

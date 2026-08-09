@@ -625,14 +625,6 @@ export default function Home() {
     [dealers],
   );
 
-  const summary = useMemo(() => {
-    const allRows = sections.flatMap((section) => section.rows);
-    const filled = allRows.filter((row) => row.partNumber.trim()).length;
-    const found = allRows.filter((row) => row.status === "found").length;
-    const missing = allRows.filter((row) => row.status === "missing").length;
-    return { filled, found, missing, sections: sections.length };
-  }, [sections]);
-
   const grandTotal = useMemo(
     () => sections.reduce((total, section) => total + sectionTotalAmount(section.rows), 0),
     [sections],
@@ -974,30 +966,25 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f5f7f6] text-[#17211c]">
-      <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
-        <header className="flex flex-col gap-4 border-b border-[#d9dfdc] pb-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-sm font-semibold text-[#617069]">Hyundai Mobis Parts Order</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-normal text-[#121916] sm:text-4xl">
+    <main className="app-shell">
+      <section className="app-container">
+        <header className="app-header">
+          <div className="app-title-block">
+            <p className="app-kicker">Hyundai Mobis Parts Order</p>
+            <h1 className="app-title">
               현대모비스 주문 파츠 기록장
             </h1>
-            <p className="mt-3 max-w-2xl text-base leading-7 text-[#526058]">
+            <p className="app-subtitle">
               날짜별 주문 파츠의 원화 가격을 빠르게 기록합니다.
             </p>
           </div>
-          <div className="grid grid-cols-3 gap-2 rounded-md border border-[#d9dfdc] bg-white p-2 shadow-sm">
-            <Stat label="입력" value={summary.filled} />
-            <Stat label="조회" value={summary.found} />
-            <Stat label="대리점" value={summary.sections} />
-          </div>
         </header>
 
-        <section className="grid gap-4">
-          <div className="overflow-hidden rounded-md border border-[#d9dfdc] bg-white shadow-sm">
-            <div className="flex flex-col gap-3 border-b border-[#e3e8e5] p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="text-sm font-semibold text-[#2d3b34]">일별 주문 입력</div>
-              <div className="flex flex-wrap gap-2">
+        <section className="order-workspace">
+          <div className="order-card">
+            <div className="order-toolbar">
+              <div className="order-toolbar-title">일별 주문 입력</div>
+              <div className="order-toolbar-actions">
                 <button
                   className="command-button primary"
                   type="button"
@@ -1262,25 +1249,25 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+                  <div className="table-scroll">
+                    <table className="order-table">
                       <thead>
-                        <tr className="bg-[#eef2ef] text-xs font-semibold uppercase text-[#617069]">
-                          <th className="table-head w-[220px]">파츠넘버</th>
-                          <th className="table-head w-[86px]">갯수</th>
-                          <th className="table-head w-[88px]">확인</th>
-                          <th className="table-head w-[150px]">가격(원)</th>
-                          <th className="table-head w-[88px]">상태</th>
-                          <th className="table-head w-[68px]"></th>
+                        <tr className="table-header-row">
+                          <th className="table-head part-column">파츠넘버</th>
+                          <th className="table-head quantity-column">갯수</th>
+                          <th className="table-head confirm-column">확인</th>
+                          <th className="table-head price-column">가격(원)</th>
+                          <th className="table-head status-column">상태</th>
+                          <th className="table-head delete-column"></th>
                         </tr>
                       </thead>
                       <tbody>
                         {section.rows.map((row) => (
-                          <tr key={row.id} className="border-t border-[#edf0ee]">
+                          <tr key={row.id} className="order-row">
                             <td className="table-cell">
                               <input
                                 aria-label="파츠넘버"
-                                className="field font-mono text-[13px]"
+                                className="field part-number-field"
                                 placeholder="파츠넘버 입력"
                                 value={row.partNumber}
                                 onChange={(event) =>
@@ -1338,7 +1325,7 @@ export default function Home() {
                             <td className="table-cell">
                               <StatusBadge status={row.status} />
                             </td>
-                            <td className="table-cell text-right">
+                            <td className="table-cell delete-cell">
                               <button
                                 aria-label="행 삭제"
                                 className="icon-button"
@@ -1361,15 +1348,6 @@ export default function Home() {
         </section>
       </section>
     </main>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="min-w-20 rounded bg-[#f5f7f6] px-3 py-2 text-center">
-      <div className="text-xl font-semibold text-[#17211c]">{value}</div>
-      <div className="text-xs text-[#617069]">{label}</div>
-    </div>
   );
 }
 
