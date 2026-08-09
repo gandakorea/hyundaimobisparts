@@ -710,6 +710,7 @@ export default function Home() {
   const [dailyOrders, setDailyOrders] = useState<DailyOrderBook>({});
   const [calendarMonth, setCalendarMonth] = useState(() => monthKeyFromDate(todayInSeoul()));
   const [activeQuarter, setActiveQuarter] = useState<1 | 2 | null>(null);
+  const [isOrderEditing, setIsOrderEditing] = useState(true);
   const [isStorageLoaded, setIsStorageLoaded] = useState(false);
 
   useEffect(() => {
@@ -784,6 +785,7 @@ export default function Home() {
     setIsGrandTotalOpen(false);
     setSharingSectionId(null);
     setFaxPreview(null);
+    setIsOrderEditing(!hasSavedRows(restoredSections));
     setIsStorageLoaded(true);
   }, []);
 
@@ -912,6 +914,10 @@ export default function Home() {
     [sections],
   );
 
+  const hasOrderContent = useMemo(() => hasSavedRows(sections), [sections]);
+
+  const isOrderReadOnly = hasOrderContent && !isOrderEditing;
+
   function resetOpenPanels() {
     setActiveDealerListSectionId(null);
     setIsGrandTotalOpen(false);
@@ -941,7 +947,18 @@ export default function Home() {
     setOrderDate(normalizedDate);
     setCalendarMonth(monthKeyFromDate(normalizedDate));
     setSections(nextSections);
+    setIsOrderEditing(!hasSavedRows(nextSections));
     resetOpenPanels();
+  }
+
+  function toggleOrderEditing() {
+    if (!hasOrderContent) return;
+
+    if (isOrderEditing) {
+      resetOpenPanels();
+    }
+
+    setIsOrderEditing((current) => !current);
   }
 
   function moveCalendarMonth(amount: number) {
@@ -963,6 +980,8 @@ export default function Home() {
   }
 
   function updateSection(sectionId: string, field: DealerSectionField, value: string) {
+    if (isOrderReadOnly) return;
+
     setSections((current) =>
       current.map((section) =>
         section.id === sectionId ? { ...section, [field]: value } : section,
@@ -971,6 +990,8 @@ export default function Home() {
   }
 
   function updateRows(sectionId: string, mapper: (row: OrderRow) => OrderRow) {
+    if (isOrderReadOnly) return;
+
     setSections((current) =>
       current.map((section) =>
         section.id === sectionId ? { ...section, rows: section.rows.map(mapper) } : section,
@@ -1024,6 +1045,8 @@ export default function Home() {
   }
 
   function addDealerFromSection(sectionId: string) {
+    if (isOrderReadOnly) return;
+
     const section = sections.find((item) => item.id === sectionId);
     if (!section) return;
 
@@ -1057,10 +1080,14 @@ export default function Home() {
   }
 
   function toggleDealerDatabase(sectionId: string) {
+    if (isOrderReadOnly) return;
+
     setActiveDealerListSectionId((current) => (current === sectionId ? null : sectionId));
   }
 
   function selectDealer(sectionId: string, dealer: DealerInfo) {
+    if (isOrderReadOnly) return;
+
     setSections((current) =>
       current.map((section) =>
         section.id === sectionId
@@ -1078,6 +1105,8 @@ export default function Home() {
   }
 
   function removeDealer(dealerName: string) {
+    if (isOrderReadOnly) return;
+
     setDealers((current) => {
       const nextDealers = current.filter((dealer) => dealer.name !== dealerName);
       window.localStorage.setItem(dealerStorageKey, JSON.stringify(nextDealers));
@@ -1100,6 +1129,8 @@ export default function Home() {
   }
 
   function clearDealerFields(sectionId: string) {
+    if (isOrderReadOnly) return;
+
     setSections((current) =>
       current.map((section) =>
         section.id === sectionId
@@ -1124,6 +1155,8 @@ export default function Home() {
   }
 
   async function confirmPart(sectionId: string, id: string) {
+    if (isOrderReadOnly) return;
+
     const selectedRow = sections
       .find((section) => section.id === sectionId)
       ?.rows.find((row) => row.id === id);
@@ -1228,6 +1261,8 @@ export default function Home() {
   }
 
   function addRow(sectionId: string) {
+    if (isOrderReadOnly) return;
+
     setSections((current) =>
       current.map((section) =>
         section.id === sectionId ? { ...section, rows: [...section.rows, makeRow()] } : section,
@@ -1236,6 +1271,8 @@ export default function Home() {
   }
 
   function removeRow(sectionId: string, id: string) {
+    if (isOrderReadOnly) return;
+
     setSections((current) =>
       current.map((section) =>
         section.id === sectionId
@@ -1252,12 +1289,16 @@ export default function Home() {
   }
 
   function addDealerSection() {
+    if (isOrderReadOnly) return;
+
     const nextSection = makeDealerSection();
     setSections((current) => [...current, nextSection]);
     setActiveDealerListSectionId(null);
   }
 
   function removeDealerSection(sectionId: string) {
+    if (isOrderReadOnly) return;
+
     setSections((current) =>
       current.length === 1 ? [makeDealerSection()] : current.filter((section) => section.id !== sectionId),
     );
@@ -1267,9 +1308,11 @@ export default function Home() {
   }
 
   function clearOrder() {
+    if (isOrderReadOnly) return;
     if (!window.confirm("정말 새로시작을 할까요?")) return;
 
     setSections([makeDealerSection()]);
+    setIsOrderEditing(true);
     resetOpenPanels();
   }
 
@@ -1457,14 +1500,29 @@ export default function Home() {
             <div className="order-toolbar">
               <div className="order-toolbar-title">일별 주문 입력</div>
               <div className="order-toolbar-actions">
+                {hasOrderContent ? (
+                  <button
+                    className={`command-button ${isOrderReadOnly ? "primary" : ""}`}
+                    type="button"
+                    onClick={toggleOrderEditing}
+                  >
+                    {isOrderReadOnly ? "수정" : "수정 완료"}
+                  </button>
+                ) : null}
                 <button
                   className="command-button primary"
+                  disabled={isOrderReadOnly}
                   type="button"
                   onClick={addDealerSection}
                 >
                   + 대리점
                 </button>
-                <button className="command-button" type="button" onClick={clearOrder}>
+                <button
+                  className="command-button"
+                  disabled={isOrderReadOnly}
+                  type="button"
+                  onClick={clearOrder}
+                >
                   새로 시작
                 </button>
               </div>
@@ -1529,6 +1587,7 @@ export default function Home() {
                         <button
                           aria-label="대리점 구간 삭제"
                           className="icon-button"
+                          disabled={isOrderReadOnly}
                           type="button"
                           onClick={() => removeDealerSection(section.id)}
                         >
@@ -1589,6 +1648,7 @@ export default function Home() {
                       <input
                         aria-label="대리점"
                         className="field dealer-name-field"
+                        disabled={isOrderReadOnly}
                         placeholder="대리점명"
                         value={section.dealer}
                         onChange={(event) =>
@@ -1605,6 +1665,7 @@ export default function Home() {
                         aria-expanded={activeDealerListSectionId === section.id}
                         aria-label="저장된 대리점 열기"
                         className="dealer-dropdown-button"
+                        disabled={isOrderReadOnly}
                         type="button"
                         onClick={() => toggleDealerDatabase(section.id)}
                       >
@@ -1619,6 +1680,7 @@ export default function Home() {
                             <div className="dealer-list-item" key={dealer.name}>
                               <button
                                 className="dealer-chip"
+                                disabled={isOrderReadOnly}
                                 type="button"
                                 onClick={() => selectDealer(section.id, dealer)}
                               >
@@ -1633,6 +1695,7 @@ export default function Home() {
                       <input
                         aria-label="전화번호"
                         className="field"
+                        disabled={isOrderReadOnly}
                         placeholder="전화번호"
                         value={section.dealerPhone}
                         onChange={(event) =>
@@ -1642,6 +1705,7 @@ export default function Home() {
                       <button
                         aria-label="전화번호 삭제"
                         className="field-clear-button"
+                        disabled={isOrderReadOnly}
                         type="button"
                         onClick={() => clearSectionContact(section.id, "dealerPhone")}
                       >
@@ -1652,6 +1716,7 @@ export default function Home() {
                       <input
                         aria-label="팩스번호"
                         className="field"
+                        disabled={isOrderReadOnly}
                         placeholder="팩스번호"
                         value={section.dealerFax}
                         onChange={(event) =>
@@ -1661,6 +1726,7 @@ export default function Home() {
                       <button
                         aria-label="팩스번호 삭제"
                         className="field-clear-button"
+                        disabled={isOrderReadOnly}
                         type="button"
                         onClick={() => clearSectionContact(section.id, "dealerFax")}
                       >
@@ -1671,6 +1737,7 @@ export default function Home() {
                       <input
                         aria-label="주소"
                         className="field"
+                        disabled={isOrderReadOnly}
                         placeholder="주소"
                         value={section.dealerAddress}
                         onChange={(event) =>
@@ -1680,6 +1747,7 @@ export default function Home() {
                       <button
                         aria-label="주소 삭제"
                         className="field-clear-button"
+                        disabled={isOrderReadOnly}
                         type="button"
                         onClick={() => clearSectionContact(section.id, "dealerAddress")}
                       >
@@ -1690,6 +1758,7 @@ export default function Home() {
                       <button
                         aria-label="대리점 저장"
                         className="dealer-save-button"
+                        disabled={isOrderReadOnly}
                         type="button"
                         onClick={() => addDealerFromSection(section.id)}
                       >
@@ -1698,6 +1767,7 @@ export default function Home() {
                       <button
                         aria-label="대리점 입력 삭제"
                         className="field-clear-button"
+                        disabled={isOrderReadOnly}
                         type="button"
                         onClick={() => clearDealerFields(section.id)}
                       >
@@ -1709,6 +1779,7 @@ export default function Home() {
                   <div className="section-row-actions">
                     <button
                       className="command-button primary"
+                      disabled={isOrderReadOnly}
                       type="button"
                       onClick={() => addRow(section.id)}
                     >
@@ -1741,6 +1812,7 @@ export default function Home() {
                               <input
                                 aria-label="파츠넘버"
                                 className="field part-number-field"
+                                disabled={isOrderReadOnly}
                                 placeholder="파츠넘버 입력"
                                 value={row.partNumber}
                                 onChange={(event) =>
@@ -1763,6 +1835,7 @@ export default function Home() {
                               <select
                                 aria-label="갯수"
                                 className="field quantity-select"
+                                disabled={isOrderReadOnly}
                                 value={row.quantity ?? 1}
                                 onChange={(event) =>
                                   updateQuantity(section.id, row.id, event.target.value)
@@ -1778,6 +1851,7 @@ export default function Home() {
                             <td className="table-cell">
                               <button
                                 className="confirm-button"
+                                disabled={isOrderReadOnly}
                                 type="button"
                                 onClick={() => confirmPartFromEvent(section.id, row.id)}
                               >
@@ -1788,6 +1862,7 @@ export default function Home() {
                               <input
                                 aria-label="가격"
                                 className="field"
+                                disabled={isOrderReadOnly}
                                 placeholder="원"
                                 value={row.price}
                                 onChange={(event) =>
@@ -1802,6 +1877,7 @@ export default function Home() {
                               <button
                                 aria-label="행 삭제"
                                 className="icon-button"
+                                disabled={isOrderReadOnly}
                                 type="button"
                                 onClick={() => removeRow(section.id, row.id)}
                               >

@@ -33,6 +33,10 @@ button:disabled {
   cursor: not-allowed;
 }
 
+button:disabled:not(.fax-share-button) {
+  opacity: 0.52;
+}
+
 .app-shell {
   min-height: 100vh;
   background: #f5f7f6;
@@ -201,6 +205,11 @@ button:disabled {
 .field:focus {
   border-color: #2f6f54;
   box-shadow: 0 0 0 3px rgba(47, 111, 84, 0.14);
+}
+
+.field:disabled {
+  background: #f1f4f2;
+  color: #617069;
 }
 
 .order-date-control .field {
