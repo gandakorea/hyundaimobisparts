@@ -1282,55 +1282,6 @@ export default function Home() {
 
         <section className="order-workspace">
           <div className="order-card">
-            <div className="order-toolbar">
-              <div className="order-toolbar-title">일별 주문 입력</div>
-              <div className="order-toolbar-actions">
-                <button
-                  className="command-button primary"
-                  type="button"
-                  onClick={addDealerSection}
-                >
-                  + 대리점
-                </button>
-                <button className="command-button" type="button" onClick={clearOrder}>
-                  새로 시작
-                </button>
-              </div>
-            </div>
-
-            <section className="order-info-band order-date-band">
-              <label className="order-date-control">
-                <span>날짜</span>
-                <input
-                  aria-label="날짜"
-                  className="field"
-                  type="date"
-                  value={orderDate}
-                  onInput={(event) => changeOrderDate(event.currentTarget.value)}
-                  onChange={(event) => changeOrderDate(event.target.value)}
-                />
-              </label>
-              <div className="grand-total-control">
-                <button
-                  aria-expanded={isGrandTotalOpen}
-                  aria-label="총금액 보기"
-                  className="grand-total-button"
-                  type="button"
-                  onClick={() => setIsGrandTotalOpen((current) => !current)}
-                >
-                  <span>총금액</span>
-                </button>
-                {isGrandTotalOpen ? (
-                  <div
-                    aria-label={`총금액 ${formatWon(grandTotal)}`}
-                    className="grand-total-amount"
-                  >
-                    <strong>{formatWon(grandTotal)}</strong>
-                  </div>
-                ) : null}
-              </div>
-            </section>
-
             <section className="calendar-band" aria-label="날짜 달력">
               <div className="calendar-header">
                 <div className="calendar-title-group">
@@ -1440,6 +1391,55 @@ export default function Home() {
                     <span className="calendar-total-empty">이 달에 누적된 금액이 없습니다.</span>
                   )}
                 </div>
+              </div>
+            </section>
+
+            <div className="order-toolbar">
+              <div className="order-toolbar-title">일별 주문 입력</div>
+              <div className="order-toolbar-actions">
+                <button
+                  className="command-button primary"
+                  type="button"
+                  onClick={addDealerSection}
+                >
+                  + 대리점
+                </button>
+                <button className="command-button" type="button" onClick={clearOrder}>
+                  새로 시작
+                </button>
+              </div>
+            </div>
+
+            <section className="order-info-band order-date-band">
+              <label className="order-date-control">
+                <span>날짜</span>
+                <input
+                  aria-label="날짜"
+                  className="field"
+                  type="date"
+                  value={orderDate}
+                  onInput={(event) => changeOrderDate(event.currentTarget.value)}
+                  onChange={(event) => changeOrderDate(event.target.value)}
+                />
+              </label>
+              <div className="grand-total-control">
+                <button
+                  aria-expanded={isGrandTotalOpen}
+                  aria-label="총금액 보기"
+                  className="grand-total-button"
+                  type="button"
+                  onClick={() => setIsGrandTotalOpen((current) => !current)}
+                >
+                  <span>총금액</span>
+                </button>
+                {isGrandTotalOpen ? (
+                  <div
+                    aria-label={`총금액 ${formatWon(grandTotal)}`}
+                    className="grand-total-amount"
+                  >
+                    <strong>{formatWon(grandTotal)}</strong>
+                  </div>
+                ) : null}
               </div>
             </section>
 
