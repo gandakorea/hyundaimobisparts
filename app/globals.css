@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f5f7f6;
+  --foreground: #17211c;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.table-head {
+  padding: 12px 14px;
+  letter-spacing: 0;
+}
+
+.table-cell {
+  padding: 10px 12px;
+  vertical-align: middle;
+}
+
+.field {
+  min-height: 40px;
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid #d9dfdc;
+  background: #ffffff;
+  padding: 8px 10px;
+  color: #17211c;
+  outline: none;
+}
+
+.field:focus {
+  border-color: #2f6f54;
+  box-shadow: 0 0 0 3px rgba(47, 111, 84, 0.14);
+}
+
+.command-button {
+  min-height: 36px;
+  border-radius: 6px;
+  border: 1px solid #cbd5d0;
+  background: #ffffff;
+  padding: 7px 12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #27362f;
+}
+
+.command-button.primary {
+  border-color: #265f47;
+  background: #265f47;
+  color: #ffffff;
+}
+
+.icon-button {
+  display: inline-grid;
+  height: 34px;
+  width: 34px;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid #d9dfdc;
+  background: #ffffff;
+  color: #6f3731;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.status-badge {
+  display: inline-flex;
+  min-width: 48px;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.status-badge.found {
+  background: #dcefe6;
+  color: #1f6547;
+}
+
+.status-badge.missing {
+  background: #fff0d7;
+  color: #815018;
+}
+
+.status-badge.empty {
+  background: #eef2ef;
+  color: #617069;
+}
+
+.sample-button {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.07);
+  padding: 10px;
+  text-align: left;
+  color: #ffffff;
+}
+
+.sample-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
