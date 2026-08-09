@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "현대모비스 주문 파츠 기록장",
-  description: "날짜별 현대모비스 파츠넘버, 가격, 제품 크기, 무게를 정리하는 주문 기록장입니다.",
+  description: "날짜별 현대모비스 파츠넘버, 원화 가격, 제품 크기, 무게를 정리하는 주문 기록장입니다.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

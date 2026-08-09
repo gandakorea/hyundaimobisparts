@@ -1,48 +1,106 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 
 type PartInfo = {
   price: string;
-  size: string;
-  weight: string;
+};
+
+type OrderInfo = {
+  date: string;
+  dealer: string;
+  dealerPhone: string;
+  dealerFax: string;
+  dealerAddress: string;
 };
 
 type OrderRow = {
   id: string;
-  date: string;
   partNumber: string;
+  quantity: number;
+  unitPrice: string;
   price: string;
-  size: string;
-  weight: string;
-  note: string;
-  status: "found" | "missing" | "empty";
+  status: "found" | "missing" | "checking" | "empty";
 };
 
-const partCatalog: Record<string, PartInfo> = {
-  "28113-3X000": {
-    price: "$18.40",
-    size: "31 x 21 x 4 cm",
-    weight: "0.18 kg",
-  },
-  "97133-D1000": {
-    price: "$22.90",
-    size: "22 x 20 x 3 cm",
-    weight: "0.12 kg",
-  },
-  "26300-35505": {
-    price: "$7.80",
-    size: "8 x 8 x 9 cm",
-    weight: "0.32 kg",
-  },
-  "58101-2MA00": {
-    price: "$38.50",
-    size: "16 x 9 x 8 cm",
-    weight: "0.95 kg",
-  },
+type SavedOrderRow = Partial<OrderRow & OrderInfo>;
+
+type DealerSection = Omit<OrderInfo, "date"> & {
+  id: string;
+  rows: OrderRow[];
 };
 
-const storageKey = "mobis-daily-parts-v1";
+type SavedDealerSection = Partial<Omit<DealerSection, "rows">> & {
+  rows?: SavedOrderRow[];
+};
+
+type SavedOrderData = {
+  orderDate?: string;
+  orderInfo?: Partial<OrderInfo>;
+  rows?: SavedOrderRow[];
+  sections?: SavedDealerSection[];
+};
+
+type DealerInfo = {
+  name: string;
+  phone: string;
+  fax: string;
+  address: string;
+};
+
+type OrderInfoField = keyof OrderInfo;
+type DealerSectionField = keyof Omit<OrderInfo, "date">;
+type RowField = "partNumber" | "price";
+
+type LookupResponse = {
+  found: boolean;
+  price?: string;
+  message?: string;
+  needsApiKey?: boolean;
+};
+
+type FaxPreview = {
+  sectionId: string;
+  dealerName: string;
+  fileName: string;
+  url: string;
+  file: File;
+};
+
+const senderFaxLine = "명성모터스 010-5567-0102";
+const faxClosingLine = "없는 부품 문자 부탁드립니다.";
+
+const partCatalog: Record<string, PartInfo> = {};
+
+const storageKey = "mobis-daily-parts-v2";
+const dealerStorageKey = "mobis-dealers-v2";
+const legacyStorageKeys = ["mobis-daily-parts-v1", "mobis-dealers-v1"];
+const resetStorageOnceKey = "mobis-cleanup-20260810-v1";
+const cleanupStorageKeys = [storageKey, dealerStorageKey, ...legacyStorageKeys];
+const koreanCollator = new Intl.Collator("ko-KR", { sensitivity: "base", numeric: true });
+const koreanInitials = [
+  "ㄱ",
+  "ㄲ",
+  "ㄴ",
+  "ㄷ",
+  "ㄸ",
+  "ㄹ",
+  "ㅁ",
+  "ㅂ",
+  "ㅃ",
+  "ㅅ",
+  "ㅆ",
+  "ㅇ",
+  "ㅈ",
+  "ㅉ",
+  "ㅊ",
+  "ㅋ",
+  "ㅌ",
+  "ㅍ",
+  "ㅎ",
+];
+const quantityOptions = Array.from({ length: 40 }, (_, index) => index + 1);
 
 function todayInSeoul() {
   return new Intl.DateTimeFormat("en-CA", {
@@ -53,17 +111,43 @@ function todayInSeoul() {
   }).format(new Date());
 }
 
-function makeRow(date = todayInSeoul()): OrderRow {
+function makeOrderInfo(): OrderInfo {
+  return {
+    date: todayInSeoul(),
+    dealer: "",
+    dealerPhone: "",
+    dealerFax: "",
+    dealerAddress: "",
+  };
+}
+
+function makeRow(): OrderRow {
   return {
     id: crypto.randomUUID(),
-    date,
     partNumber: "",
+    quantity: 1,
+    unitPrice: "",
     price: "",
-    size: "",
-    weight: "",
-    note: "",
     status: "empty",
   };
+}
+
+function makeDealerSection(
+  values: Partial<OrderInfo> & { id?: unknown } = {},
+  rows: OrderRow[] = [makeRow()],
+): DealerSection {
+  return {
+    id: stringValue(values.id) || crypto.randomUUID(),
+    dealer: stringValue(values.dealer),
+    dealerPhone: stringValue(values.dealerPhone),
+    dealerFax: stringValue(values.dealerFax),
+    dealerAddress: stringValue(values.dealerAddress),
+    rows,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function lookupPart(partNumber: string): PartInfo | null {
@@ -71,70 +155,822 @@ function lookupPart(partNumber: string): PartInfo | null {
   return partCatalog[key] ?? null;
 }
 
+function normalizeDealer(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function normalizeContact(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function koreanInitialIndex(value: string) {
+  const firstChar = normalizeDealer(value).charAt(0);
+  if (!firstChar) return Number.MAX_SAFE_INTEGER;
+
+  const directInitialIndex = koreanInitials.indexOf(firstChar);
+  if (directInitialIndex >= 0) return directInitialIndex;
+
+  const code = firstChar.charCodeAt(0);
+  if (code < 0xac00 || code > 0xd7a3) return Number.MAX_SAFE_INTEGER - 1;
+
+  return Math.floor((code - 0xac00) / 588);
+}
+
+function compareDealerNames(leftName: string, rightName: string) {
+  const initialDifference = koreanInitialIndex(leftName) - koreanInitialIndex(rightName);
+  if (initialDifference !== 0) return initialDifference;
+
+  return koreanCollator.compare(leftName, rightName);
+}
+
+function sortDealers(dealers: DealerInfo[]) {
+  return [...dealers].sort((left, right) => compareDealerNames(left.name, right.name));
+}
+
+function dealerFromSaved(value: unknown): DealerInfo | null {
+  if (typeof value === "string") {
+    const name = normalizeDealer(value);
+    return name ? { name, phone: "", fax: "", address: "" } : null;
+  }
+
+  if (!isRecord(value)) return null;
+
+  const name = typeof value.name === "string" ? normalizeDealer(value.name) : "";
+  if (!name) return null;
+
+  return {
+    name,
+    phone: typeof value.phone === "string" ? normalizeContact(value.phone) : "",
+    fax: typeof value.fax === "string" ? normalizeContact(value.fax) : "",
+    address: typeof value.address === "string" ? normalizeContact(value.address) : "",
+  };
+}
+
+function isDealerInfo(value: DealerInfo | null): value is DealerInfo {
+  return value !== null;
+}
+
+function dealerInfoFromSection(section: DealerSection): DealerInfo | null {
+  const name = normalizeDealer(section.dealer);
+  if (!name) return null;
+
+  return {
+    name,
+    phone: normalizeContact(section.dealerPhone),
+    fax: normalizeContact(section.dealerFax),
+    address: normalizeContact(section.dealerAddress),
+  };
+}
+
+function mergeDealers(dealers: DealerInfo[]) {
+  const merged = new Map<string, DealerInfo>();
+
+  for (const dealer of dealers) {
+    const name = normalizeDealer(dealer.name);
+    if (!name) continue;
+
+    const current = merged.get(name);
+    merged.set(name, {
+      name,
+      phone: normalizeContact(dealer.phone) || current?.phone || "",
+      fax: normalizeContact(dealer.fax) || current?.fax || "",
+      address: normalizeContact(dealer.address) || current?.address || "",
+    });
+  }
+
+  return sortDealers([...merged.values()]);
+}
+
+function upsertDealer(dealers: DealerInfo[], dealer: DealerInfo) {
+  const name = normalizeDealer(dealer.name);
+  return sortDealers([
+    ...dealers.filter((item) => normalizeDealer(item.name) !== name),
+    {
+      ...dealer,
+      name,
+      phone: normalizeContact(dealer.phone),
+      fax: normalizeContact(dealer.fax),
+      address: normalizeContact(dealer.address),
+    },
+  ]);
+}
+
+function isSavedStatus(value: unknown): value is OrderRow["status"] {
+  return value === "found" || value === "missing" || value === "empty";
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function normalizeQuantity(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+
+  return Math.min(40, Math.max(1, Math.round(parsed)));
+}
+
+function parseWon(price: string) {
+  const numericText = price.replace(/[^\d]/g, "");
+  if (!numericText) return null;
+
+  const value = Number(numericText);
+  return Number.isFinite(value) ? value : null;
+}
+
+function formatWon(value: number) {
+  return `${new Intl.NumberFormat("ko-KR").format(value)}원`;
+}
+
+function totalPrice(unitPrice: string, quantity: number) {
+  const unitValue = parseWon(unitPrice);
+  if (unitValue === null) return "";
+
+  return formatWon(unitValue * quantity);
+}
+
+function sectionTotalAmount(rows: OrderRow[]) {
+  return rows.reduce((total, row) => {
+    if (row.status !== "found") return total;
+
+    return total + (parseWon(row.price) ?? 0);
+  }, 0);
+}
+
+function formatPartNumberForFax(partNumber: string) {
+  const compactPartNumber = partNumber.trim().toUpperCase().replace(/[^0-9A-Z]/g, "");
+  if (compactPartNumber.length <= 5) return compactPartNumber;
+
+  return `${compactPartNumber.slice(0, 5)}-${compactPartNumber.slice(5)}`;
+}
+
+function filledFaxRows(section: DealerSection) {
+  return section.rows
+    .map((row) => ({
+      partNumber: formatPartNumberForFax(row.partNumber),
+      quantity: normalizeQuantity(row.quantity),
+    }))
+    .filter((row) => row.partNumber);
+}
+
+function sanitizeFileName(value: string) {
+  return value.trim().replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, "_");
+}
+
+function drawCanvasText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+) {
+  if (context.measureText(text).width <= maxWidth) {
+    context.fillText(text, x, y);
+    return;
+  }
+
+  let clippedText = text;
+  while (clippedText.length > 0 && context.measureText(`${clippedText}...`).width > maxWidth) {
+    clippedText = clippedText.slice(0, -1);
+  }
+  context.fillText(`${clippedText}...`, x, y);
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+        return;
+      }
+
+      reject(new Error("이미지를 만들지 못했습니다."));
+    }, "image/png");
+  });
+}
+
+async function makeFaxImageFile(orderDate: string, section: DealerSection, sectionIndex: number) {
+  const width = 1240;
+  const height = 1754;
+  const margin = 96;
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("이미지를 만들지 못했습니다.");
+  }
+
+  const rows = filledFaxRows(section);
+  const dealerName = normalizeDealer(section.dealer) || `대리점 ${sectionIndex + 1}`;
+  const firstLine = `${orderDate || todayInSeoul()} ${dealerName}`;
+  const partListTop = 276;
+  const partListBottom = height - 210;
+  const availablePartHeight = partListBottom - partListTop;
+  const lineHeight =
+    rows.length > 0
+      ? Math.max(30, Math.min(58, Math.floor(availablePartHeight / rows.length)))
+      : 58;
+  const partFontSize = lineHeight < 38 ? 25 : 34;
+  const fileName = `${sanitizeFileName(orderDate)}-${sanitizeFileName(dealerName)}-팩스.png`;
+
+  canvas.width = width;
+  canvas.height = height;
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+
+  context.fillStyle = "#17211c";
+  context.textBaseline = "top";
+  context.font = '800 48px "Malgun Gothic", Arial, sans-serif';
+  drawCanvasText(context, firstLine, margin, 88, width - margin * 2);
+
+  context.font = '700 42px "Malgun Gothic", Arial, sans-serif';
+  drawCanvasText(context, senderFaxLine, margin, 166, width - margin * 2);
+
+  context.strokeStyle = "#d9dfdc";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(margin, 238);
+  context.lineTo(width - margin, 238);
+  context.stroke();
+
+  if (rows.length === 0) {
+    context.fillStyle = "#617069";
+    context.font = '700 34px "Malgun Gothic", Arial, sans-serif';
+    context.fillText("입력된 파츠넘버가 없습니다.", margin, partListTop);
+  }
+
+  rows.forEach((row, index) => {
+    const rowTop = partListTop + index * lineHeight;
+
+    context.strokeStyle = "#edf0ee";
+    context.beginPath();
+    context.moveTo(margin, rowTop + lineHeight);
+    context.lineTo(width - margin, rowTop + lineHeight);
+    context.stroke();
+
+    context.fillStyle = "#17211c";
+    context.font = `800 ${partFontSize}px "Malgun Gothic", Arial, sans-serif`;
+    drawCanvasText(
+      context,
+      `${row.partNumber} ${row.quantity}개`,
+      margin,
+      rowTop + Math.max(4, (lineHeight - partFontSize) / 2),
+      width - margin * 2,
+    );
+  });
+
+  const closingTop =
+    rows.length > 0
+      ? Math.min(partListBottom + 46, partListTop + rows.length * lineHeight + 48)
+      : partListTop + 92;
+  context.fillStyle = "#17211c";
+  context.font = '800 36px "Malgun Gothic", Arial, sans-serif';
+  drawCanvasText(context, faxClosingLine, margin, closingTop, width - margin * 2);
+
+  const blob = await canvasToBlob(canvas);
+  return new File([blob], fileName || `mobis-fax-${sectionIndex + 1}.png`, {
+    type: "image/png",
+  });
+}
+
+function unitPriceFromTotal(price: string, quantity: number) {
+  const totalValue = parseWon(price);
+  if (totalValue === null) return "";
+
+  return formatWon(Math.round(totalValue / quantity));
+}
+
+function restoreRows(savedRows: SavedOrderRow[]) {
+  if (savedRows.length === 0) return [makeRow()];
+
+  return savedRows.map((row) => {
+    const partNumber = stringValue(row.partNumber);
+    const info = lookupPart(partNumber);
+    const quantity = normalizeQuantity(row.quantity);
+    const price = stringValue(row.price);
+    const normalizedPrice = info && price.includes("$") ? info.price : price;
+    const unitPrice = stringValue(row.unitPrice) || unitPriceFromTotal(normalizedPrice, quantity);
+    const status = isSavedStatus(row.status) ? row.status : "empty";
+
+    return {
+      id: stringValue(row.id) || crypto.randomUUID(),
+      partNumber,
+      quantity,
+      unitPrice,
+      price: unitPrice ? totalPrice(unitPrice, quantity) : normalizedPrice,
+      status: unitPrice || normalizedPrice ? "found" : status,
+    };
+  });
+}
+
+function restoreOrderInfo(parsed: unknown, savedRows: SavedOrderRow[]) {
+  const fallback = savedRows[0] ?? {};
+  const savedOrderInfo =
+    isRecord(parsed) && isRecord(parsed.orderInfo) ? parsed.orderInfo : fallback;
+
+  return {
+    date: stringValue(savedOrderInfo.date) || todayInSeoul(),
+    dealer: stringValue(savedOrderInfo.dealer),
+    dealerPhone: stringValue(savedOrderInfo.dealerPhone),
+    dealerFax: stringValue(savedOrderInfo.dealerFax),
+    dealerAddress: stringValue(savedOrderInfo.dealerAddress),
+  };
+}
+
+function restoreOrderDate(parsed: unknown, restoredOrderInfo: OrderInfo) {
+  if (isRecord(parsed) && typeof parsed.orderDate === "string") {
+    return parsed.orderDate;
+  }
+
+  return restoredOrderInfo.date || todayInSeoul();
+}
+
+function restoreSection(section: SavedDealerSection) {
+  return makeDealerSection(
+    {
+      id: section.id,
+      dealer: stringValue(section.dealer),
+      dealerPhone: stringValue(section.dealerPhone),
+      dealerFax: stringValue(section.dealerFax),
+      dealerAddress: stringValue(section.dealerAddress),
+    },
+    restoreRows(Array.isArray(section.rows) ? section.rows : []),
+  );
+}
+
+function restoreSections(
+  parsed: unknown,
+  savedRows: SavedOrderRow[],
+  restoredOrderInfo: OrderInfo,
+) {
+  const savedSections = getSavedSections(parsed);
+  if (savedSections.length > 0) {
+    return savedSections.map(restoreSection);
+  }
+
+  return [makeDealerSection(restoredOrderInfo, restoreRows(savedRows))];
+}
+
+function getSavedRows(parsed: unknown): SavedOrderRow[] {
+  if (Array.isArray(parsed)) return parsed as SavedOrderRow[];
+  if (isRecord(parsed) && Array.isArray((parsed as SavedOrderData).rows)) {
+    return (parsed as SavedOrderData).rows ?? [];
+  }
+
+  return [];
+}
+
+function getSavedSections(parsed: unknown): SavedDealerSection[] {
+  if (isRecord(parsed) && Array.isArray((parsed as SavedOrderData).sections)) {
+    return (parsed as SavedOrderData).sections ?? [];
+  }
+
+  return [];
+}
+
 export default function Home() {
-  const [rows, setRows] = useState<OrderRow[]>([makeRow()]);
+  const [orderDate, setOrderDate] = useState(todayInSeoul);
+  const [sections, setSections] = useState<DealerSection[]>([makeDealerSection()]);
+  const [dealers, setDealers] = useState<DealerInfo[]>([]);
+  const [activeDealerListSectionId, setActiveDealerListSectionId] = useState<string | null>(null);
+  const [isGrandTotalOpen, setIsGrandTotalOpen] = useState(false);
+  const [sharingSectionId, setSharingSectionId] = useState<string | null>(null);
+  const [faxPreview, setFaxPreview] = useState<FaxPreview | null>(null);
+  const [isStorageLoaded, setIsStorageLoaded] = useState(false);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(storageKey);
-    if (!saved) return;
-
-    try {
-      const parsed = JSON.parse(saved) as OrderRow[];
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        setRows(parsed);
-      }
-    } catch {
-      window.localStorage.removeItem(storageKey);
+    if (!window.localStorage.getItem(resetStorageOnceKey)) {
+      cleanupStorageKeys.forEach((key) => window.localStorage.removeItem(key));
+      window.localStorage.setItem(resetStorageOnceKey, "done");
+      setOrderDate(todayInSeoul());
+      setSections([makeDealerSection()]);
+      setDealers([]);
+      setActiveDealerListSectionId(null);
+      setIsGrandTotalOpen(false);
+      setSharingSectionId(null);
+      setFaxPreview(null);
+      setIsStorageLoaded(true);
+      return;
     }
+
+    const saved = window.localStorage.getItem(storageKey);
+    const savedDealers = window.localStorage.getItem(dealerStorageKey);
+
+    if (savedDealers) {
+      try {
+        const parsedDealers = JSON.parse(savedDealers) as unknown;
+        if (Array.isArray(parsedDealers)) {
+          setDealers(mergeDealers(parsedDealers.map(dealerFromSaved).filter(isDealerInfo)));
+        }
+      } catch {
+        window.localStorage.removeItem(dealerStorageKey);
+      }
+    }
+
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as unknown;
+        const savedRows = getSavedRows(parsed);
+        const restoredOrderInfo = restoreOrderInfo(parsed, savedRows);
+        const restoredSections = restoreSections(parsed, savedRows, restoredOrderInfo);
+        const restoredDate = restoreOrderDate(parsed, restoredOrderInfo);
+        const dealersFromRows = savedRows
+          .map((row) => ({
+            name: stringValue(row.dealer),
+            phone: stringValue(row.dealerPhone),
+            fax: stringValue(row.dealerFax),
+            address: stringValue(row.dealerAddress),
+          }))
+          .filter((dealer) => normalizeDealer(dealer.name));
+
+        setOrderDate(restoredDate);
+        setSections(restoredSections);
+        setDealers((current) =>
+          mergeDealers([
+            ...current,
+            ...restoredSections.map(dealerInfoFromSection).filter(isDealerInfo),
+            ...dealersFromRows,
+          ]),
+        );
+      } catch {
+        window.localStorage.removeItem(storageKey);
+      }
+    }
+
+    setIsStorageLoaded(true);
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(storageKey, JSON.stringify(rows));
-  }, [rows]);
+    if (!isStorageLoaded) return;
+    window.localStorage.setItem(storageKey, JSON.stringify({ orderDate, sections }));
+  }, [isStorageLoaded, orderDate, sections]);
+
+  useEffect(() => {
+    if (!isStorageLoaded) return;
+    window.localStorage.setItem(
+      dealerStorageKey,
+      JSON.stringify(mergeDealers(dealers.map(dealerFromSaved).filter(isDealerInfo))),
+    );
+  }, [dealers, isStorageLoaded]);
+
+  useEffect(() => {
+    return () => {
+      if (faxPreview?.url) URL.revokeObjectURL(faxPreview.url);
+    };
+  }, [faxPreview?.url]);
+
+  const visibleDealers = useMemo(
+    () => mergeDealers(dealers.map(dealerFromSaved).filter(isDealerInfo)),
+    [dealers],
+  );
 
   const summary = useMemo(() => {
-    const filled = rows.filter((row) => row.partNumber.trim()).length;
-    const found = rows.filter((row) => row.status === "found").length;
-    const missing = rows.filter((row) => row.status === "missing").length;
-    return { filled, found, missing };
-  }, [rows]);
+    const allRows = sections.flatMap((section) => section.rows);
+    const filled = allRows.filter((row) => row.partNumber.trim()).length;
+    const found = allRows.filter((row) => row.status === "found").length;
+    const missing = allRows.filter((row) => row.status === "missing").length;
+    return { filled, found, missing, sections: sections.length };
+  }, [sections]);
 
-  function updateRow(id: string, field: keyof OrderRow, value: string) {
-    setRows((current) =>
-      current.map((row) => {
+  const grandTotal = useMemo(
+    () => sections.reduce((total, section) => total + sectionTotalAmount(section.rows), 0),
+    [sections],
+  );
+
+  function updateSection(sectionId: string, field: DealerSectionField, value: string) {
+    setSections((current) =>
+      current.map((section) =>
+        section.id === sectionId ? { ...section, [field]: value } : section,
+      ),
+    );
+  }
+
+  function updateRows(sectionId: string, mapper: (row: OrderRow) => OrderRow) {
+    setSections((current) =>
+      current.map((section) =>
+        section.id === sectionId ? { ...section, rows: section.rows.map(mapper) } : section,
+      ),
+    );
+  }
+
+  function updateRow(sectionId: string, id: string, field: RowField, value: string) {
+    updateRows(sectionId, (row) => {
         if (row.id !== id) return row;
 
         if (field === "partNumber") {
           const partNumber = value.toUpperCase();
-          const info = lookupPart(partNumber);
 
           return {
             ...row,
             partNumber,
-            price: info?.price ?? row.price,
-            size: info?.size ?? row.size,
-            weight: info?.weight ?? row.weight,
-            status: partNumber.trim() ? (info ? "found" : "missing") : "empty",
+            unitPrice: "",
+            price: "",
+            status: "empty",
           };
         }
 
-        return { ...row, [field]: value };
-      }),
+        return {
+          ...row,
+          [field]: value,
+          unitPrice:
+            field === "price"
+              ? unitPriceFromTotal(value, normalizeQuantity(row.quantity))
+              : row.unitPrice,
+        };
+      });
+  }
+
+  function updateQuantity(sectionId: string, id: string, value: string) {
+    const quantity = normalizeQuantity(value);
+
+    updateRows(sectionId, (row) => {
+        if (row.id !== id) return row;
+
+        const previousQuantity = normalizeQuantity(row.quantity);
+        const unitPrice = row.unitPrice || unitPriceFromTotal(row.price, previousQuantity);
+
+        return {
+          ...row,
+          quantity,
+          unitPrice,
+          price: unitPrice ? totalPrice(unitPrice, quantity) : row.price,
+        };
+      });
+  }
+
+  function addDealerFromSection(sectionId: string) {
+    const section = sections.find((item) => item.id === sectionId);
+    if (!section) return;
+
+    const dealer: DealerInfo = {
+      name: normalizeDealer(section.dealer),
+      phone: normalizeContact(section.dealerPhone),
+      fax: normalizeContact(section.dealerFax),
+      address: normalizeContact(section.dealerAddress),
+    };
+    if (!dealer.name) return;
+
+    setSections((current) =>
+      current.map((item) =>
+        item.id === sectionId
+          ? {
+              ...item,
+              dealer: dealer.name,
+              dealerPhone: dealer.phone,
+              dealerFax: dealer.fax,
+              dealerAddress: dealer.address,
+            }
+          : item,
+      ),
+    );
+    setDealers((current) => {
+      const nextDealers = upsertDealer(current, dealer);
+      window.localStorage.setItem(dealerStorageKey, JSON.stringify(nextDealers));
+      return nextDealers;
+    });
+    setActiveDealerListSectionId(null);
+  }
+
+  function toggleDealerDatabase(sectionId: string) {
+    setActiveDealerListSectionId((current) => (current === sectionId ? null : sectionId));
+  }
+
+  function selectDealer(sectionId: string, dealer: DealerInfo) {
+    setSections((current) =>
+      current.map((section) =>
+        section.id === sectionId
+          ? {
+              ...section,
+              dealer: dealer.name,
+              dealerPhone: dealer.phone,
+              dealerFax: dealer.fax,
+              dealerAddress: dealer.address,
+            }
+          : section,
+      ),
+    );
+    setActiveDealerListSectionId(null);
+  }
+
+  function removeDealer(dealerName: string) {
+    setDealers((current) => {
+      const nextDealers = current.filter((dealer) => dealer.name !== dealerName);
+      window.localStorage.setItem(dealerStorageKey, JSON.stringify(nextDealers));
+      return nextDealers;
+    });
+
+    setSections((current) =>
+      current.map((section) =>
+        section.dealer === dealerName
+          ? {
+              ...section,
+              dealer: "",
+              dealerPhone: "",
+              dealerFax: "",
+              dealerAddress: "",
+            }
+          : section,
+      ),
     );
   }
 
-  function addRow() {
-    setRows((current) => [...current, makeRow(current.at(-1)?.date)]);
+  function clearDealerFields(sectionId: string) {
+    setSections((current) =>
+      current.map((section) =>
+        section.id === sectionId
+          ? {
+              ...section,
+              dealer: "",
+              dealerPhone: "",
+              dealerFax: "",
+              dealerAddress: "",
+            }
+          : section,
+      ),
+    );
+    setActiveDealerListSectionId(null);
   }
 
-  function removeRow(id: string) {
-    setRows((current) =>
-      current.length === 1 ? [makeRow(current[0]?.date)] : current.filter((row) => row.id !== id),
+  function clearSectionContact(
+    sectionId: string,
+    field: "dealerPhone" | "dealerFax" | "dealerAddress",
+  ) {
+    updateSection(sectionId, field, "");
+  }
+
+  async function confirmPart(sectionId: string, id: string) {
+    const selectedRow = sections
+      .find((section) => section.id === sectionId)
+      ?.rows.find((row) => row.id === id);
+    const partNumber = selectedRow?.partNumber.trim().toUpperCase() ?? "";
+
+    if (!partNumber) {
+      updateRows(sectionId, (row) =>
+        row.id === id
+            ? {
+                ...row,
+                partNumber: "",
+                unitPrice: "",
+                price: "",
+                status: "empty",
+              }
+            : row,
+      );
+      return;
+    }
+
+    updateRows(sectionId, (row) =>
+      row.id === id
+          ? {
+              ...row,
+              partNumber,
+              unitPrice: "",
+              price: "",
+              status: "checking",
+            }
+          : row,
+    );
+
+    const savedInfo = lookupPart(partNumber);
+    if (savedInfo) {
+      updateRows(sectionId, (row) =>
+        row.id === id && row.partNumber.trim().toUpperCase() === partNumber
+            ? {
+                ...row,
+                unitPrice: savedInfo.price,
+                price: totalPrice(savedInfo.price, normalizeQuantity(row.quantity)),
+                status: "found",
+              }
+            : row,
+      );
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/parts/lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partNumber }),
+      });
+      const data = (await response.json()) as LookupResponse;
+
+      if (!response.ok) {
+        throw new Error(data.message ?? "웹검색 결과를 가져오지 못했습니다.");
+      }
+
+      const lookupPrice = data.price;
+
+      if (data.found && lookupPrice) {
+        updateRows(sectionId, (row) =>
+          row.id === id && row.partNumber.trim().toUpperCase() === partNumber
+              ? {
+                  ...row,
+                  unitPrice: lookupPrice,
+                  price: totalPrice(lookupPrice, normalizeQuantity(row.quantity)),
+                  status: "found",
+                }
+              : row,
+        );
+        return;
+      }
+
+      updateRows(sectionId, (row) =>
+        row.id === id && row.partNumber.trim().toUpperCase() === partNumber
+            ? {
+                ...row,
+                status: "missing",
+              }
+            : row,
+      );
+    } catch {
+      updateRows(sectionId, (row) =>
+        row.id === id && row.partNumber.trim().toUpperCase() === partNumber
+            ? {
+                ...row,
+                status: "missing",
+              }
+            : row,
+      );
+    }
+  }
+
+  function confirmPartFromEvent(sectionId: string, id: string) {
+    void confirmPart(sectionId, id);
+  }
+
+  function isChecking(status: OrderRow["status"]) {
+    return status === "checking";
+  }
+
+  function addRow(sectionId: string) {
+    setSections((current) =>
+      current.map((section) =>
+        section.id === sectionId ? { ...section, rows: [...section.rows, makeRow()] } : section,
+      ),
     );
   }
 
-  function clearRows() {
-    setRows([makeRow()]);
+  function removeRow(sectionId: string, id: string) {
+    setSections((current) =>
+      current.map((section) =>
+        section.id === sectionId
+          ? {
+              ...section,
+              rows:
+                section.rows.length === 1
+                  ? [makeRow()]
+                  : section.rows.filter((row) => row.id !== id),
+            }
+          : section,
+      ),
+    );
+  }
+
+  function addDealerSection() {
+    const nextSection = makeDealerSection();
+    setSections((current) => [...current, nextSection]);
+    setActiveDealerListSectionId(null);
+  }
+
+  function removeDealerSection(sectionId: string) {
+    setSections((current) =>
+      current.length === 1 ? [makeDealerSection()] : current.filter((section) => section.id !== sectionId),
+    );
+    setActiveDealerListSectionId((current) => (current === sectionId ? null : current));
+    setSharingSectionId((current) => (current === sectionId ? null : current));
+    setFaxPreview((current) => (current?.sectionId === sectionId ? null : current));
+  }
+
+  function clearOrder() {
+    setSections([makeDealerSection()]);
+    setOrderDate(todayInSeoul());
+    setActiveDealerListSectionId(null);
+    setIsGrandTotalOpen(false);
+    setSharingSectionId(null);
+    setFaxPreview(null);
+  }
+
+  async function shareDealerFax(section: DealerSection, sectionIndex: number) {
+    setSharingSectionId(section.id);
+
+    try {
+      const file = await makeFaxImageFile(orderDate, section, sectionIndex);
+      const dealerName = normalizeDealer(section.dealer) || `대리점 ${sectionIndex + 1}`;
+      const url = URL.createObjectURL(file);
+
+      setFaxPreview({
+        sectionId: section.id,
+        dealerName,
+        fileName: file.name,
+        url,
+        file,
+      });
+    } catch {
+      window.alert("팩스용 이미지를 만들지 못했습니다. 다시 시도해 주세요.");
+    } finally {
+      setSharingSectionId(null);
+    }
   }
 
   return (
@@ -147,154 +983,381 @@ export default function Home() {
               현대모비스 주문 파츠 기록장
             </h1>
             <p className="mt-3 max-w-2xl text-base leading-7 text-[#526058]">
-              날짜와 파츠넘버를 넣으면 등록된 항목의 가격, 제품 크기, 무게를 바로 채워 둡니다.
+              날짜별 주문 파츠의 원화 가격을 빠르게 기록합니다.
             </p>
           </div>
           <div className="grid grid-cols-3 gap-2 rounded-md border border-[#d9dfdc] bg-white p-2 shadow-sm">
             <Stat label="입력" value={summary.filled} />
-            <Stat label="자동" value={summary.found} />
-            <Stat label="확인" value={summary.missing} />
+            <Stat label="조회" value={summary.found} />
+            <Stat label="대리점" value={summary.sections} />
           </div>
         </header>
 
-        <section className="grid gap-4 lg:grid-cols-[1fr_280px]">
+        <section className="grid gap-4">
           <div className="overflow-hidden rounded-md border border-[#d9dfdc] bg-white shadow-sm">
             <div className="flex flex-col gap-3 border-b border-[#e3e8e5] p-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-sm font-semibold text-[#2d3b34]">일별 주문 입력</div>
               <div className="flex flex-wrap gap-2">
-                <button className="command-button primary" type="button" onClick={addRow}>
-                  + 행 추가
+                <button
+                  className="command-button primary"
+                  type="button"
+                  onClick={addDealerSection}
+                >
+                  + 대리점
                 </button>
-                <button className="command-button" type="button" onClick={clearRows}>
+                <button className="command-button" type="button" onClick={clearOrder}>
                   새로 시작
                 </button>
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] border-collapse text-left text-sm">
-                <thead>
-                  <tr className="bg-[#eef2ef] text-xs font-semibold uppercase text-[#617069]">
-                    <th className="table-head w-[150px]">날짜</th>
-                    <th className="table-head w-[190px]">파츠넘버</th>
-                    <th className="table-head w-[130px]">가격</th>
-                    <th className="table-head w-[180px]">크기</th>
-                    <th className="table-head w-[120px]">무게</th>
-                    <th className="table-head">메모</th>
-                    <th className="table-head w-[88px]">상태</th>
-                    <th className="table-head w-[68px]"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.id} className="border-t border-[#edf0ee]">
-                      <td className="table-cell">
-                        <input
-                          aria-label="날짜"
-                          className="field"
-                          type="date"
-                          value={row.date}
-                          onChange={(event) => updateRow(row.id, "date", event.target.value)}
-                        />
-                      </td>
-                      <td className="table-cell">
-                        <input
-                          aria-label="파츠넘버"
-                          className="field font-mono text-[13px]"
-                          placeholder="예: 28113-3X000"
-                          value={row.partNumber}
-                          onChange={(event) => updateRow(row.id, "partNumber", event.target.value)}
-                        />
-                      </td>
-                      <td className="table-cell">
-                        <input
-                          aria-label="가격"
-                          className="field"
-                          placeholder="$"
-                          value={row.price}
-                          onChange={(event) => updateRow(row.id, "price", event.target.value)}
-                        />
-                      </td>
-                      <td className="table-cell">
-                        <input
-                          aria-label="크기"
-                          className="field"
-                          placeholder="L x W x H"
-                          value={row.size}
-                          onChange={(event) => updateRow(row.id, "size", event.target.value)}
-                        />
-                      </td>
-                      <td className="table-cell">
-                        <input
-                          aria-label="무게"
-                          className="field"
-                          placeholder="kg"
-                          value={row.weight}
-                          onChange={(event) => updateRow(row.id, "weight", event.target.value)}
-                        />
-                      </td>
-                      <td className="table-cell">
-                        <input
-                          aria-label="메모"
-                          className="field"
-                          placeholder="주문처, 확인사항"
-                          value={row.note}
-                          onChange={(event) => updateRow(row.id, "note", event.target.value)}
-                        />
-                      </td>
-                      <td className="table-cell">
-                        <StatusBadge status={row.status} />
-                      </td>
-                      <td className="table-cell text-right">
+            <section className="order-info-band order-date-band">
+              <label className="order-date-control">
+                <span>날짜</span>
+                <input
+                  aria-label="날짜"
+                  className="field"
+                  type="date"
+                  value={orderDate}
+                  onChange={(event) => setOrderDate(event.target.value)}
+                />
+              </label>
+              <div className="grand-total-control">
+                <button
+                  aria-expanded={isGrandTotalOpen}
+                  aria-label="총금액 보기"
+                  className="grand-total-button"
+                  type="button"
+                  onClick={() => setIsGrandTotalOpen((current) => !current)}
+                >
+                  <span>총금액</span>
+                </button>
+                {isGrandTotalOpen ? (
+                  <div
+                    aria-label={`총금액 ${formatWon(grandTotal)}`}
+                    className="grand-total-amount"
+                  >
+                    <strong>{formatWon(grandTotal)}</strong>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+
+            <div className="dealer-sections">
+              {sections.map((section, sectionIndex) => (
+                <section
+                  aria-label={`대리점 ${sectionIndex + 1}`}
+                  className="dealer-order-section"
+                  key={section.id}
+                >
+                  <div className="dealer-section-header">
+                    <div className="dealer-section-title">
+                      <span>대리점 {sectionIndex + 1}</span>
+                      <strong>{section.dealer || "대리점 입력"}</strong>
+                    </div>
+                    <div className="dealer-section-actions">
+                      <button
+                        aria-label={`${section.dealer || `대리점 ${sectionIndex + 1}`} PNG 만들기`}
+                        className="fax-share-button"
+                        disabled={sharingSectionId === section.id}
+                        type="button"
+                        onClick={() => shareDealerFax(section, sectionIndex)}
+                      >
+                        {sharingSectionId === section.id ? "준비중" : "PNG 만들기"}
+                      </button>
+                      {sections.length > 1 ? (
                         <button
-                          aria-label="행 삭제"
+                          aria-label="대리점 구간 삭제"
                           className="icon-button"
                           type="button"
-                          onClick={() => removeRow(row.id)}
+                          onClick={() => removeDealerSection(section.id)}
                         >
                           ×
                         </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {faxPreview?.sectionId === section.id ? (
+                    <div className="fax-preview-panel">
+                      <div className="fax-preview-image-shell">
+                        <Image
+                          alt={`${faxPreview.dealerName} 팩스용 PNG`}
+                          className="fax-preview-image"
+                          height={255}
+                          src={faxPreview.url}
+                          style={{
+                            height: "100%",
+                            objectFit: "cover",
+                            objectPosition: "top left",
+                            width: "100%",
+                          }}
+                          unoptimized
+                          width={180}
+                        />
+                      </div>
+                      <div className="fax-preview-detail">
+                        <strong>PNG 파일 준비됨</strong>
+                        <span>{faxPreview.fileName}</span>
+                      </div>
+                      <div className="fax-preview-actions">
+                        <a
+                          className="command-button primary"
+                          download={faxPreview.fileName}
+                          href={faxPreview.url}
+                        >
+                          PNG 저장
+                        </a>
+                        <button
+                          aria-label="PNG 미리보기 닫기"
+                          className="icon-button"
+                          type="button"
+                          onClick={() => setFaxPreview(null)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="dealer-form-grid dealer-section-form">
+                    <div
+                      className={`dealer-select-control ${
+                        activeDealerListSectionId === section.id ? "open" : ""
+                      }`}
+                    >
+                      <input
+                        aria-label="대리점"
+                        className="field dealer-name-field"
+                        placeholder="대리점명"
+                        value={section.dealer}
+                        onChange={(event) =>
+                          updateSection(section.id, "dealer", event.target.value)
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            addDealerFromSection(section.id);
+                          }
+                        }}
+                      />
+                      <button
+                        aria-expanded={activeDealerListSectionId === section.id}
+                        aria-label="저장된 대리점 열기"
+                        className="dealer-dropdown-button"
+                        type="button"
+                        onClick={() => toggleDealerDatabase(section.id)}
+                      >
+                        ▼
+                      </button>
+                      {activeDealerListSectionId === section.id && visibleDealers.length > 0 ? (
+                        <div
+                          className="dealer-list dealer-dropdown-list"
+                          aria-label="저장된 대리점 목록"
+                        >
+                          {visibleDealers.map((dealer) => (
+                            <div className="dealer-list-item" key={dealer.name}>
+                              <button
+                                className="dealer-chip"
+                                type="button"
+                                onClick={() => selectDealer(section.id, dealer)}
+                              >
+                                <span className="dealer-chip-name">{dealer.name}</span>
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="field-clear-row">
+                      <input
+                        aria-label="전화번호"
+                        className="field"
+                        placeholder="전화번호"
+                        value={section.dealerPhone}
+                        onChange={(event) =>
+                          updateSection(section.id, "dealerPhone", event.target.value)
+                        }
+                      />
+                      <button
+                        aria-label="전화번호 삭제"
+                        className="field-clear-button"
+                        type="button"
+                        onClick={() => clearSectionContact(section.id, "dealerPhone")}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="field-clear-row">
+                      <input
+                        aria-label="팩스번호"
+                        className="field"
+                        placeholder="팩스번호"
+                        value={section.dealerFax}
+                        onChange={(event) =>
+                          updateSection(section.id, "dealerFax", event.target.value)
+                        }
+                      />
+                      <button
+                        aria-label="팩스번호 삭제"
+                        className="field-clear-button"
+                        type="button"
+                        onClick={() => clearSectionContact(section.id, "dealerFax")}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="field-clear-row dealer-address-row">
+                      <input
+                        aria-label="주소"
+                        className="field"
+                        placeholder="주소"
+                        value={section.dealerAddress}
+                        onChange={(event) =>
+                          updateSection(section.id, "dealerAddress", event.target.value)
+                        }
+                      />
+                      <button
+                        aria-label="주소 삭제"
+                        className="field-clear-button"
+                        type="button"
+                        onClick={() => clearSectionContact(section.id, "dealerAddress")}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="dealer-panel-actions">
+                      <button
+                        aria-label="대리점 저장"
+                        className="dealer-save-button"
+                        type="button"
+                        onClick={() => addDealerFromSection(section.id)}
+                      >
+                        저장
+                      </button>
+                      <button
+                        aria-label="대리점 입력 삭제"
+                        className="field-clear-button"
+                        type="button"
+                        onClick={() => clearDealerFields(section.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="section-row-actions">
+                    <button
+                      className="command-button primary"
+                      type="button"
+                      onClick={() => addRow(section.id)}
+                    >
+                      + 행 추가
+                    </button>
+                    <div
+                      aria-label={`합계 금액 ${formatWon(sectionTotalAmount(section.rows))}`}
+                      className="section-total-box"
+                    >
+                      <strong>{formatWon(sectionTotalAmount(section.rows))}</strong>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+                      <thead>
+                        <tr className="bg-[#eef2ef] text-xs font-semibold uppercase text-[#617069]">
+                          <th className="table-head w-[220px]">파츠넘버</th>
+                          <th className="table-head w-[86px]">갯수</th>
+                          <th className="table-head w-[88px]">확인</th>
+                          <th className="table-head w-[150px]">가격(원)</th>
+                          <th className="table-head w-[88px]">상태</th>
+                          <th className="table-head w-[68px]"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {section.rows.map((row) => (
+                          <tr key={row.id} className="border-t border-[#edf0ee]">
+                            <td className="table-cell">
+                              <input
+                                aria-label="파츠넘버"
+                                className="field font-mono text-[13px]"
+                                placeholder="파츠넘버 입력"
+                                value={row.partNumber}
+                                onChange={(event) =>
+                                  updateRow(
+                                    section.id,
+                                    row.id,
+                                    "partNumber",
+                                    event.target.value,
+                                  )
+                                }
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    confirmPartFromEvent(section.id, row.id);
+                                  }
+                                }}
+                              />
+                            </td>
+                            <td className="table-cell">
+                              <select
+                                aria-label="갯수"
+                                className="field quantity-select"
+                                value={row.quantity ?? 1}
+                                onChange={(event) =>
+                                  updateQuantity(section.id, row.id, event.target.value)
+                                }
+                              >
+                                {quantityOptions.map((quantity) => (
+                                  <option key={quantity} value={quantity}>
+                                    {quantity}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="table-cell">
+                              <button
+                                className="confirm-button"
+                                type="button"
+                                onClick={() => confirmPartFromEvent(section.id, row.id)}
+                              >
+                                {isChecking(row.status) ? "조회중" : "확인"}
+                              </button>
+                            </td>
+                            <td className="table-cell">
+                              <input
+                                aria-label="가격"
+                                className="field"
+                                placeholder="원"
+                                value={row.price}
+                                onChange={(event) =>
+                                  updateRow(section.id, row.id, "price", event.target.value)
+                                }
+                              />
+                            </td>
+                            <td className="table-cell">
+                              <StatusBadge status={row.status} />
+                            </td>
+                            <td className="table-cell text-right">
+                              <button
+                                aria-label="행 삭제"
+                                className="icon-button"
+                                type="button"
+                                onClick={() => removeRow(section.id, row.id)}
+                              >
+                                ×
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              ))}
             </div>
           </div>
 
-          <aside className="rounded-md border border-[#d9dfdc] bg-[#17211c] p-4 text-white shadow-sm">
-            <h2 className="text-base font-semibold">자동 입력 샘플</h2>
-            <div className="mt-4 space-y-3">
-              {Object.entries(partCatalog).map(([partNumber, info]) => (
-                <button
-                  key={partNumber}
-                  className="sample-button"
-                  type="button"
-                  onClick={() =>
-                    setRows((current) => [
-                      ...current,
-                      {
-                        ...makeRow(current.at(-1)?.date),
-                        partNumber,
-                        price: info.price,
-                        size: info.size,
-                        weight: info.weight,
-                        status: "found",
-                      },
-                    ])
-                  }
-                >
-                  <span className="font-mono text-sm">{partNumber}</span>
-                  <span className="text-xs text-[#b8c8bf]">
-                    {info.price} · {info.weight}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <p className="mt-5 text-sm leading-6 text-[#c7d5ce]">
-              실제 파츠넘버를 주면 가격표와 치수 데이터를 계속 추가해 나갈 수 있습니다.
-            </p>
-          </aside>
         </section>
       </section>
     </main>
@@ -311,6 +1374,13 @@ function Stat({ label, value }: { label: string; value: number }) {
 }
 
 function StatusBadge({ status }: { status: OrderRow["status"] }) {
-  const label = status === "found" ? "자동" : status === "missing" ? "확인" : "대기";
+  const label =
+    status === "found"
+      ? "완료"
+      : status === "missing"
+        ? "확인필요"
+        : status === "checking"
+          ? "조회중"
+          : "대기";
   return <span className={`status-badge ${status}`}>{label}</span>;
 }
