@@ -75,7 +75,8 @@ type FaxPreview = {
   file: File;
 };
 
-const senderFaxLine = "명성모터스 010-5567-0102";
+const senderFaxLine =
+  process.env.NEXT_PUBLIC_FAX_SENDER_LINE ?? "명성모터스 010-5567-0102";
 const faxClosingLine = "없는 부품 문자 부탁드립니다.";
 
 const partCatalog: Record<string, PartInfo> = {};
