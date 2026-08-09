@@ -708,6 +708,7 @@ export default function Home() {
   const [faxPreview, setFaxPreview] = useState<FaxPreview | null>(null);
   const [dailyOrders, setDailyOrders] = useState<DailyOrderBook>({});
   const [calendarMonth, setCalendarMonth] = useState(() => monthKeyFromDate(todayInSeoul()));
+  const [activeQuarter, setActiveQuarter] = useState<1 | 2 | null>(null);
   const [isStorageLoaded, setIsStorageLoaded] = useState(false);
 
   useEffect(() => {
@@ -878,6 +879,20 @@ export default function Home() {
     () => calendarDailyTotals.reduce((total, item) => total + item.total, 0),
     [calendarDailyTotals],
   );
+
+  const quarterTotals = useMemo(() => {
+    const totals: Record<1 | 2, number> = { 1: 0, 2: 0 };
+
+    Object.entries(dailyOrdersWithCurrentDate).forEach(([date, order]) => {
+      const { year, month } = safeDateParts(date);
+      if (year !== calendarParts.year || !hasSavedRows(order.sections)) return;
+
+      const quarter: 1 | 2 = month <= 6 ? 1 : 2;
+      totals[quarter] += savedSectionsTotalAmount(order.sections);
+    });
+
+    return totals;
+  }, [calendarParts.year, dailyOrdersWithCurrentDate]);
 
   const selectedCalendarDailyTotal = useMemo(() => {
     if (!orderDate.startsWith(calendarMonth)) return null;
@@ -1382,8 +1397,39 @@ export default function Home() {
               </div>
               <div className="calendar-total-panel" aria-label="월별 합계">
                 <div className="calendar-total-summary">
-                  <span>월 누적 합계</span>
+                  <div className="calendar-total-heading">
+                    <span>월 누적 합계</span>
+                    <div className="quarter-total-actions" aria-label="분기 합계">
+                      {([1, 2] as const).map((quarter) => (
+                        <button
+                          aria-label={`${quarter}분기 합계 보기`}
+                          aria-pressed={activeQuarter === quarter}
+                          className="quarter-total-button"
+                          key={quarter}
+                          type="button"
+                          onClick={() =>
+                            setActiveQuarter((current) => (current === quarter ? null : quarter))
+                          }
+                        >
+                          {quarter}분기
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <strong>{formatWon(calendarMonthTotal)}</strong>
+                  {activeQuarter ? (
+                    <div
+                      aria-label={`${calendarParts.year}년 ${activeQuarter}분기 누적 합계 ${formatWon(
+                        quarterTotals[activeQuarter],
+                      )}`}
+                      className="quarter-total-result"
+                    >
+                      <span>
+                        {activeQuarter}분기 {activeQuarter === 1 ? "1~6월" : "7~12월"}
+                      </span>
+                      <strong>{formatWon(quarterTotals[activeQuarter])}</strong>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="calendar-daily-total-list">
                   {selectedCalendarDailyTotal ? (

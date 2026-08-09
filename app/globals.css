@@ -455,17 +455,75 @@ button:disabled {
   padding: 12px;
 }
 
-.calendar-total-summary span {
+.calendar-total-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.calendar-total-summary span,
+.quarter-total-result span {
   color: #617069;
   font-size: 12px;
   font-weight: 900;
 }
 
-.calendar-total-summary strong {
+.quarter-total-result span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-total-summary > strong {
   color: #17211c;
   font-size: 22px;
   font-weight: 900;
   line-height: 1.15;
+}
+
+.quarter-total-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.quarter-total-button {
+  display: inline-grid;
+  min-height: 28px;
+  place-items: center;
+  border: 1px solid #d9dfdc;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 5px 8px;
+  color: #265f47;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.quarter-total-button[aria-pressed="true"] {
+  border-color: #265f47;
+  background: #265f47;
+  color: #ffffff;
+}
+
+.quarter-total-result {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid #d9dfdc;
+  margin-top: 6px;
+  padding-top: 8px;
+}
+
+.quarter-total-result strong {
+  color: #17211c;
+  font-size: 15px;
+  font-weight: 900;
+  white-space: nowrap;
 }
 
 .calendar-daily-total-list {
