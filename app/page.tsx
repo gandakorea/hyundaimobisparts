@@ -465,10 +465,21 @@ async function makeFaxImageFile(orderDate: string, section: DealerSection, secti
   const partListTop = 276;
   const partListBottom = height - 210;
   const availablePartHeight = partListBottom - partListTop;
+  const rowGap =
+    rows.length > 1
+      ? Math.min(
+          16,
+          Math.max(0, Math.floor((availablePartHeight - rows.length * 30) / (rows.length - 1))),
+        )
+      : 0;
   const lineHeight =
     rows.length > 0
-      ? Math.max(30, Math.min(58, Math.floor(availablePartHeight / rows.length)))
+      ? Math.max(
+          30,
+          Math.min(58, Math.floor((availablePartHeight - rowGap * (rows.length - 1)) / rows.length)),
+        )
       : 58;
+  const rowStride = lineHeight + rowGap;
   const partFontSize = lineHeight < 38 ? 25 : 34;
   const fileName = `${sanitizeFileName(orderDate)}-${sanitizeFileName(dealerName)}-팩스.png`;
 
@@ -500,7 +511,7 @@ async function makeFaxImageFile(orderDate: string, section: DealerSection, secti
   }
 
   rows.forEach((row, index) => {
-    const rowTop = partListTop + index * lineHeight;
+    const rowTop = partListTop + index * rowStride;
 
     context.strokeStyle = "#edf0ee";
     context.beginPath();
@@ -521,7 +532,10 @@ async function makeFaxImageFile(orderDate: string, section: DealerSection, secti
 
   const closingTop =
     rows.length > 0
-      ? Math.min(partListBottom + 46, partListTop + rows.length * lineHeight + 48)
+      ? Math.min(
+          partListBottom + 46,
+          partListTop + rows.length * lineHeight + (rows.length - 1) * rowGap + 48,
+        )
       : partListTop + 92;
   context.fillStyle = "#17211c";
   context.font = '800 36px "Malgun Gothic", Arial, sans-serif';
