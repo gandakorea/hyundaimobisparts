@@ -879,6 +879,18 @@ export default function Home() {
     [calendarDailyTotals],
   );
 
+  const selectedCalendarDailyTotal = useMemo(() => {
+    if (!orderDate.startsWith(calendarMonth)) return null;
+
+    const selectedOrder = dailyOrdersWithCurrentDate[orderDate];
+    if (!hasSavedRows(selectedOrder?.sections)) return null;
+
+    return {
+      date: orderDate,
+      total: savedSectionsTotalAmount(selectedOrder.sections),
+    };
+  }, [calendarMonth, dailyOrdersWithCurrentDate, orderDate]);
+
   const grandTotal = useMemo(
     () => sections.reduce((total, section) => total + sectionTotalAmount(section.rows), 0),
     [sections],
@@ -1374,21 +1386,20 @@ export default function Home() {
                   <strong>{formatWon(calendarMonthTotal)}</strong>
                 </div>
                 <div className="calendar-daily-total-list">
-                  {calendarDailyTotals.length > 0 ? (
-                    calendarDailyTotals.map((item) => (
-                      <button
-                        aria-current={item.date === orderDate ? "date" : undefined}
-                        className="calendar-daily-total-row"
-                        key={item.date}
-                        type="button"
-                        onClick={() => changeOrderDate(item.date)}
-                      >
-                        <span>{formatDailyTotalDate(item.date)}</span>
-                        <strong>{formatWon(item.total)}</strong>
-                      </button>
-                    ))
+                  {selectedCalendarDailyTotal ? (
+                    <button
+                      aria-current="date"
+                      className="calendar-daily-total-row"
+                      type="button"
+                      onClick={() => changeOrderDate(selectedCalendarDailyTotal.date)}
+                    >
+                      <span>{formatDailyTotalDate(selectedCalendarDailyTotal.date)}</span>
+                      <strong>{formatWon(selectedCalendarDailyTotal.total)}</strong>
+                    </button>
                   ) : (
-                    <span className="calendar-total-empty">이 달에 누적된 금액이 없습니다.</span>
+                    <span className="calendar-total-empty">
+                      선택한 날짜에 누적된 금액이 없습니다.
+                    </span>
                   )}
                 </div>
               </div>
