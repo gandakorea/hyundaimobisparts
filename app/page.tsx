@@ -110,6 +110,8 @@ const koreanInitials = [
   "ㅎ",
 ];
 const quantityOptions = Array.from({ length: 40 }, (_, index) => index + 1);
+const weekDays = ["일", "월", "화", "수", "목", "금", "토"];
+const monthOptions = Array.from({ length: 12 }, (_, index) => index + 1);
 
 function todayInSeoul() {
   return new Intl.DateTimeFormat("en-CA", {
@@ -118,6 +120,89 @@ function todayInSeoul() {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+}
+
+function pad2(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+function safeDateParts(dateText: string) {
+  const fallbackParts = todayInSeoul().split("-").map(Number);
+  const fallback = {
+    year: fallbackParts[0] ?? 2026,
+    month: fallbackParts[1] ?? 1,
+    day: fallbackParts[2] ?? 1,
+  };
+  const parts = dateText.split("-").map(Number);
+  const [year, month, day] = parts;
+
+  if (
+    parts.length !== 3 ||
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return fallback;
+  }
+
+  return { year, month, day };
+}
+
+function formatMonthKey(year: number, month: number) {
+  return `${year}-${pad2(month)}`;
+}
+
+function monthKeyFromDate(dateText: string) {
+  const { year, month } = safeDateParts(dateText);
+  return formatMonthKey(year, month);
+}
+
+function parseMonthKey(monthKey: string) {
+  const [year, month] = monthKey.split("-").map(Number);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+    const today = safeDateParts(todayInSeoul());
+    return { year: today.year, month: today.month };
+  }
+
+  return { year, month };
+}
+
+function makeDateText(year: number, month: number, day: number) {
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}
+
+function makeCalendarDays(monthKey: string) {
+  const { year, month } = parseMonthKey(monthKey);
+  const firstWeekday = new Date(year, month - 1, 1).getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const days: Array<{ date: string; day: number } | null> = Array.from(
+    { length: firstWeekday },
+    () => null,
+  );
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    days.push({
+      date: makeDateText(year, month, day),
+      day,
+    });
+  }
+
+  while (days.length % 7 !== 0) {
+    days.push(null);
+  }
+
+  return days;
+}
+
+function moveMonth(monthKey: string, amount: number) {
+  const { year, month } = parseMonthKey(monthKey);
+  const nextMonth = new Date(year, month - 1 + amount, 1);
+
+  return formatMonthKey(nextMonth.getFullYear(), nextMonth.getMonth() + 1);
 }
 
 function makeOrderInfo(): OrderInfo {
@@ -604,6 +689,7 @@ export default function Home() {
   const [sharingSectionId, setSharingSectionId] = useState<string | null>(null);
   const [faxPreview, setFaxPreview] = useState<FaxPreview | null>(null);
   const [dailyOrders, setDailyOrders] = useState<DailyOrderBook>({});
+  const [calendarMonth, setCalendarMonth] = useState(() => monthKeyFromDate(todayInSeoul()));
   const [isStorageLoaded, setIsStorageLoaded] = useState(false);
 
   useEffect(() => {
@@ -671,6 +757,7 @@ export default function Home() {
 
     setDailyOrders(restoredDailyOrders);
     setOrderDate(selectedDate);
+    setCalendarMonth(monthKeyFromDate(selectedDate));
     setSections(restoredSections);
     setDealers(mergeDealers([...collectedDealers, ...dealersFromSections(restoredSections)]));
     setActiveDealerListSectionId(null);
@@ -717,17 +804,37 @@ export default function Home() {
     [dealers],
   );
 
-  const savedDateOptions = useMemo(() => {
+  const savedOrderDateSet = useMemo(() => {
     const dates = new Set<string>();
 
     Object.entries(dailyOrders).forEach(([date, order]) => {
       if (hasSavedRows(order.sections)) dates.add(date);
     });
 
-    if (orderDate) dates.add(orderDate);
+    if (hasSavedRows(sections)) dates.add(orderDate);
 
-    return [...dates].sort((left, right) => right.localeCompare(left));
-  }, [dailyOrders, orderDate]);
+    return dates;
+  }, [dailyOrders, orderDate, sections]);
+
+  const calendarParts = useMemo(() => parseMonthKey(calendarMonth), [calendarMonth]);
+
+  const calendarDays = useMemo(() => makeCalendarDays(calendarMonth), [calendarMonth]);
+
+  const calendarYearOptions = useMemo(() => {
+    const years = new Set<number>();
+    const baseYear = calendarParts.year;
+
+    for (let year = baseYear - 2; year <= baseYear + 2; year += 1) {
+      years.add(year);
+    }
+
+    Object.keys(dailyOrders).forEach((date) => {
+      years.add(safeDateParts(date).year);
+    });
+    years.add(safeDateParts(orderDate).year);
+
+    return [...years].sort((left, right) => left - right);
+  }, [calendarParts.year, dailyOrders, orderDate]);
 
   const grandTotal = useMemo(
     () => sections.reduce((total, section) => total + sectionTotalAmount(section.rows), 0),
@@ -761,8 +868,27 @@ export default function Home() {
 
     setDailyOrders(nextDailyOrders);
     setOrderDate(normalizedDate);
+    setCalendarMonth(monthKeyFromDate(normalizedDate));
     setSections(nextSections);
     resetOpenPanels();
+  }
+
+  function moveCalendarMonth(amount: number) {
+    setCalendarMonth((current) => moveMonth(current, amount));
+  }
+
+  function changeCalendarYear(year: string) {
+    const parsedYear = Number(year);
+    if (!Number.isInteger(parsedYear)) return;
+
+    setCalendarMonth(formatMonthKey(parsedYear, calendarParts.month));
+  }
+
+  function changeCalendarMonth(month: string) {
+    const parsedMonth = Number(month);
+    if (!Number.isInteger(parsedMonth) || parsedMonth < 1 || parsedMonth > 12) return;
+
+    setCalendarMonth(formatMonthKey(calendarParts.year, parsedMonth));
   }
 
   function updateSection(sectionId: string, field: DealerSectionField, value: string) {
@@ -1162,20 +1288,91 @@ export default function Home() {
               </div>
             </section>
 
-            <section className="saved-date-band" aria-label="저장된 날짜">
-              <span className="saved-date-label">저장된 날짜</span>
-              <div className="saved-date-list">
-                {savedDateOptions.map((date) => (
+            <section className="calendar-band" aria-label="날짜 달력">
+              <div className="calendar-header">
+                <div className="calendar-title-group">
+                  <span>달력</span>
+                  <strong>
+                    {calendarParts.year}년 {calendarParts.month}월
+                  </strong>
+                </div>
+                <div className="calendar-controls">
                   <button
-                    aria-current={date === orderDate ? "date" : undefined}
-                    className="saved-date-button"
-                    key={date}
+                    aria-label="이전 달"
+                    className="calendar-nav-button"
                     type="button"
-                    onClick={() => changeOrderDate(date)}
+                    onClick={() => moveCalendarMonth(-1)}
                   >
-                    {date}
+                    ‹
                   </button>
+                  <select
+                    aria-label="연도 선택"
+                    className="calendar-select"
+                    value={calendarParts.year}
+                    onChange={(event) => changeCalendarYear(event.target.value)}
+                  >
+                    {calendarYearOptions.map((year) => (
+                      <option key={year} value={year}>
+                        {year}년
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="월 선택"
+                    className="calendar-select"
+                    value={calendarParts.month}
+                    onChange={(event) => changeCalendarMonth(event.target.value)}
+                  >
+                    {monthOptions.map((month) => (
+                      <option key={month} value={month}>
+                        {month}월
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    aria-label="다음 달"
+                    className="calendar-nav-button"
+                    type="button"
+                    onClick={() => moveCalendarMonth(1)}
+                  >
+                    ›
+                  </button>
+                  <button
+                    className="calendar-today-button"
+                    type="button"
+                    onClick={() => changeOrderDate(todayInSeoul())}
+                  >
+                    오늘
+                  </button>
+                </div>
+              </div>
+              <div className="calendar-grid">
+                {weekDays.map((day) => (
+                  <div className="calendar-weekday" key={day}>
+                    {day}
+                  </div>
                 ))}
+                {calendarDays.map((day, index) =>
+                  day ? (
+                    <button
+                      aria-current={day.date === orderDate ? "date" : undefined}
+                      aria-label={`${day.date} 날짜 열기`}
+                      className={`calendar-day ${
+                        savedOrderDateSet.has(day.date) ? "saved" : ""
+                      }`}
+                      key={day.date}
+                      type="button"
+                      onClick={() => changeOrderDate(day.date)}
+                    >
+                      <span className="calendar-day-number">{day.day}</span>
+                      {savedOrderDateSet.has(day.date) ? (
+                        <span aria-hidden="true" className="calendar-saved-dot" />
+                      ) : null}
+                    </button>
+                  ) : (
+                    <span aria-hidden="true" className="calendar-day empty" key={`empty-${index}`} />
+                  ),
+                )}
               </div>
             </section>
 
