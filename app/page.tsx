@@ -42,6 +42,13 @@ type SavedOrderData = {
   sections?: SavedDealerSection[];
 };
 
+type SavedDailyOrder = {
+  sections?: SavedDealerSection[];
+  updatedAt?: string;
+};
+
+type DailyOrderBook = Record<string, SavedDailyOrder>;
+
 type DealerInfo = {
   name: string;
   phone: string;
@@ -74,10 +81,12 @@ const faxClosingLine = "없는 부품 문자 부탁드립니다.";
 const partCatalog: Record<string, PartInfo> = {};
 
 const storageKey = "mobis-daily-parts-v2";
+const dailyStorageKey = "mobis-daily-orders-v3";
+const lastOrderDateKey = "mobis-last-order-date-v3";
 const dealerStorageKey = "mobis-dealers-v2";
 const legacyStorageKeys = ["mobis-daily-parts-v1", "mobis-dealers-v1"];
 const resetStorageOnceKey = "mobis-cleanup-20260810-v1";
-const cleanupStorageKeys = [storageKey, dealerStorageKey, ...legacyStorageKeys];
+const cleanupStorageKeys = legacyStorageKeys;
 const koreanCollator = new Intl.Collator("ko-KR", { sensitivity: "base", numeric: true });
 const koreanInitials = [
   "ㄱ",
@@ -499,6 +508,12 @@ function restoreSection(section: SavedDealerSection) {
   );
 }
 
+function restoreSavedSections(savedSections: SavedDealerSection[] | undefined) {
+  if (!savedSections || savedSections.length === 0) return [makeDealerSection()];
+
+  return savedSections.map(restoreSection);
+}
+
 function restoreSections(
   parsed: unknown,
   savedRows: SavedOrderRow[],
@@ -506,7 +521,7 @@ function restoreSections(
 ) {
   const savedSections = getSavedSections(parsed);
   if (savedSections.length > 0) {
-    return savedSections.map(restoreSection);
+    return restoreSavedSections(savedSections);
   }
 
   return [makeDealerSection(restoredOrderInfo, restoreRows(savedRows))];
@@ -529,6 +544,57 @@ function getSavedSections(parsed: unknown): SavedDealerSection[] {
   return [];
 }
 
+function restoreDailyOrders(parsed: unknown): DailyOrderBook {
+  if (!isRecord(parsed)) return {};
+
+  return Object.entries(parsed).reduce<DailyOrderBook>((orders, [date, value]) => {
+    if (!date || !isRecord(value)) return orders;
+
+    const savedSections = Array.isArray(value.sections)
+      ? (value.sections as SavedDealerSection[])
+      : [];
+    if (savedSections.length === 0) return orders;
+
+    orders[date] = {
+      sections: savedSections,
+      updatedAt: stringValue(value.updatedAt),
+    };
+    return orders;
+  }, {});
+}
+
+function hasSavedRows(savedSections: SavedDealerSection[] | undefined) {
+  return Boolean(
+    savedSections?.some((section) => {
+      const hasDealerInfo = Boolean(
+        stringValue(section.dealer).trim() ||
+          stringValue(section.dealerPhone).trim() ||
+          stringValue(section.dealerFax).trim() ||
+          stringValue(section.dealerAddress).trim(),
+      );
+      const hasPartInfo = section.rows?.some(
+        (row) =>
+          stringValue(row.partNumber).trim() ||
+          stringValue(row.price).trim() ||
+          normalizeQuantity(row.quantity) > 1,
+      );
+
+      return hasDealerInfo || hasPartInfo;
+    }),
+  );
+}
+
+function makeDailySnapshot(sections: DealerSection[]): SavedDailyOrder {
+  return {
+    sections,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function dealersFromSections(sections: DealerSection[]) {
+  return sections.map(dealerInfoFromSection).filter(isDealerInfo);
+}
+
 export default function Home() {
   const [orderDate, setOrderDate] = useState(todayInSeoul);
   const [sections, setSections] = useState<DealerSection[]>([makeDealerSection()]);
@@ -537,34 +603,39 @@ export default function Home() {
   const [isGrandTotalOpen, setIsGrandTotalOpen] = useState(false);
   const [sharingSectionId, setSharingSectionId] = useState<string | null>(null);
   const [faxPreview, setFaxPreview] = useState<FaxPreview | null>(null);
+  const [dailyOrders, setDailyOrders] = useState<DailyOrderBook>({});
   const [isStorageLoaded, setIsStorageLoaded] = useState(false);
 
   useEffect(() => {
     if (!window.localStorage.getItem(resetStorageOnceKey)) {
       cleanupStorageKeys.forEach((key) => window.localStorage.removeItem(key));
       window.localStorage.setItem(resetStorageOnceKey, "done");
-      setOrderDate(todayInSeoul());
-      setSections([makeDealerSection()]);
-      setDealers([]);
-      setActiveDealerListSectionId(null);
-      setIsGrandTotalOpen(false);
-      setSharingSectionId(null);
-      setFaxPreview(null);
-      setIsStorageLoaded(true);
-      return;
     }
 
     const saved = window.localStorage.getItem(storageKey);
+    const savedDailyOrders = window.localStorage.getItem(dailyStorageKey);
     const savedDealers = window.localStorage.getItem(dealerStorageKey);
+    const savedLastOrderDate = window.localStorage.getItem(lastOrderDateKey);
+    const collectedDealers: DealerInfo[] = [];
+    let restoredDailyOrders: DailyOrderBook = {};
+    let fallbackDate = todayInSeoul();
 
     if (savedDealers) {
       try {
         const parsedDealers = JSON.parse(savedDealers) as unknown;
         if (Array.isArray(parsedDealers)) {
-          setDealers(mergeDealers(parsedDealers.map(dealerFromSaved).filter(isDealerInfo)));
+          collectedDealers.push(...parsedDealers.map(dealerFromSaved).filter(isDealerInfo));
         }
       } catch {
         window.localStorage.removeItem(dealerStorageKey);
+      }
+    }
+
+    if (savedDailyOrders) {
+      try {
+        restoredDailyOrders = restoreDailyOrders(JSON.parse(savedDailyOrders) as unknown);
+      } catch {
+        window.localStorage.removeItem(dailyStorageKey);
       }
     }
 
@@ -584,26 +655,47 @@ export default function Home() {
           }))
           .filter((dealer) => normalizeDealer(dealer.name));
 
-        setOrderDate(restoredDate);
-        setSections(restoredSections);
-        setDealers((current) =>
-          mergeDealers([
-            ...current,
-            ...restoredSections.map(dealerInfoFromSection).filter(isDealerInfo),
-            ...dealersFromRows,
-          ]),
-        );
+        fallbackDate = restoredDate || fallbackDate;
+        collectedDealers.push(...dealersFromSections(restoredSections), ...dealersFromRows);
+
+        if (!restoredDailyOrders[restoredDate] && hasSavedRows(restoredSections)) {
+          restoredDailyOrders[restoredDate] = makeDailySnapshot(restoredSections);
+        }
       } catch {
         window.localStorage.removeItem(storageKey);
       }
     }
 
+    const selectedDate = savedLastOrderDate || fallbackDate;
+    const restoredSections = restoreSavedSections(restoredDailyOrders[selectedDate]?.sections);
+
+    setDailyOrders(restoredDailyOrders);
+    setOrderDate(selectedDate);
+    setSections(restoredSections);
+    setDealers(mergeDealers([...collectedDealers, ...dealersFromSections(restoredSections)]));
+    setActiveDealerListSectionId(null);
+    setIsGrandTotalOpen(false);
+    setSharingSectionId(null);
+    setFaxPreview(null);
     setIsStorageLoaded(true);
   }, []);
 
   useEffect(() => {
     if (!isStorageLoaded) return;
-    window.localStorage.setItem(storageKey, JSON.stringify({ orderDate, sections }));
+    const currentSnapshot = makeDailySnapshot(sections);
+
+    setDailyOrders((current) => {
+      const nextDailyOrders = {
+        ...current,
+        [orderDate]: currentSnapshot,
+      };
+
+      window.localStorage.setItem(dailyStorageKey, JSON.stringify(nextDailyOrders));
+      window.localStorage.setItem(storageKey, JSON.stringify({ orderDate, sections }));
+      window.localStorage.setItem(lastOrderDateKey, orderDate);
+
+      return nextDailyOrders;
+    });
   }, [isStorageLoaded, orderDate, sections]);
 
   useEffect(() => {
@@ -625,10 +717,53 @@ export default function Home() {
     [dealers],
   );
 
+  const savedDateOptions = useMemo(() => {
+    const dates = new Set<string>();
+
+    Object.entries(dailyOrders).forEach(([date, order]) => {
+      if (hasSavedRows(order.sections)) dates.add(date);
+    });
+
+    if (orderDate) dates.add(orderDate);
+
+    return [...dates].sort((left, right) => right.localeCompare(left));
+  }, [dailyOrders, orderDate]);
+
   const grandTotal = useMemo(
     () => sections.reduce((total, section) => total + sectionTotalAmount(section.rows), 0),
     [sections],
   );
+
+  function resetOpenPanels() {
+    setActiveDealerListSectionId(null);
+    setIsGrandTotalOpen(false);
+    setSharingSectionId(null);
+    setFaxPreview(null);
+  }
+
+  function saveCurrentDateToBook() {
+    return {
+      ...dailyOrders,
+      [orderDate]: makeDailySnapshot(sections),
+    };
+  }
+
+  function changeOrderDate(nextDate: string) {
+    const normalizedDate = nextDate || todayInSeoul();
+    if (normalizedDate === orderDate) return;
+
+    const nextDailyOrders = saveCurrentDateToBook();
+    const nextSections = restoreSavedSections(nextDailyOrders[normalizedDate]?.sections);
+
+    window.localStorage.setItem(dailyStorageKey, JSON.stringify(nextDailyOrders));
+    window.localStorage.setItem(storageKey, JSON.stringify({ orderDate, sections }));
+    window.localStorage.setItem(lastOrderDateKey, normalizedDate);
+
+    setDailyOrders(nextDailyOrders);
+    setOrderDate(normalizedDate);
+    setSections(nextSections);
+    resetOpenPanels();
+  }
 
   function updateSection(sectionId: string, field: DealerSectionField, value: string) {
     setSections((current) =>
@@ -936,11 +1071,7 @@ export default function Home() {
 
   function clearOrder() {
     setSections([makeDealerSection()]);
-    setOrderDate(todayInSeoul());
-    setActiveDealerListSectionId(null);
-    setIsGrandTotalOpen(false);
-    setSharingSectionId(null);
-    setFaxPreview(null);
+    resetOpenPanels();
   }
 
   async function shareDealerFax(section: DealerSection, sectionIndex: number) {
@@ -1006,7 +1137,8 @@ export default function Home() {
                   className="field"
                   type="date"
                   value={orderDate}
-                  onChange={(event) => setOrderDate(event.target.value)}
+                  onInput={(event) => changeOrderDate(event.currentTarget.value)}
+                  onChange={(event) => changeOrderDate(event.target.value)}
                 />
               </label>
               <div className="grand-total-control">
@@ -1027,6 +1159,23 @@ export default function Home() {
                     <strong>{formatWon(grandTotal)}</strong>
                   </div>
                 ) : null}
+              </div>
+            </section>
+
+            <section className="saved-date-band" aria-label="저장된 날짜">
+              <span className="saved-date-label">저장된 날짜</span>
+              <div className="saved-date-list">
+                {savedDateOptions.map((date) => (
+                  <button
+                    aria-current={date === orderDate ? "date" : undefined}
+                    className="saved-date-button"
+                    key={date}
+                    type="button"
+                    onClick={() => changeOrderDate(date)}
+                  >
+                    {date}
+                  </button>
+                ))}
               </div>
             </section>
 

@@ -315,6 +315,50 @@ button:disabled {
   line-height: 1;
 }
 
+.saved-date-band {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #e3e8e5;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.saved-date-label {
+  flex: none;
+  color: #617069;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.saved-date-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.saved-date-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d9dfdc;
+  border-radius: 6px;
+  background: #f7faf8;
+  padding: 6px 10px;
+  color: #27362f;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.saved-date-button[aria-current="date"] {
+  border-color: #265f47;
+  background: #265f47;
+  color: #ffffff;
+}
+
 .dealer-summary {
   display: grid;
   min-height: 54px;
@@ -778,6 +822,21 @@ button:disabled {
 
   .grand-total-amount {
     width: 100%;
+  }
+
+  .saved-date-band {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .saved-date-list {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+  }
+
+  .saved-date-button {
+    flex: none;
   }
 
   .order-info-band,
