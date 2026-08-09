@@ -1267,6 +1267,8 @@ export default function Home() {
   }
 
   function clearOrder() {
+    if (!window.confirm("정말 새로시작을 할까요?")) return;
+
     setSections([makeDealerSection()]);
     resetOpenPanels();
   }
