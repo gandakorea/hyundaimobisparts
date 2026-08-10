@@ -75,6 +75,19 @@ type FaxPreview = {
   file: File;
 };
 
+type DailyPngPreview = {
+  date: string;
+  fileName: string;
+  url: string;
+  file: File;
+};
+
+type DailyPngRow = {
+  partNumber: string;
+  quantity: number;
+  price: string;
+};
+
 const senderFaxLine =
   process.env.NEXT_PUBLIC_FAX_SENDER_LINE ?? "명성모터스 010-5567-0102";
 const faxClosingLine = "없는 부품 문자 부탁드립니다.";
@@ -412,6 +425,23 @@ function filledFaxRows(section: DealerSection) {
     .filter((row) => row.partNumber);
 }
 
+function formatPriceForDailyPng(price: string) {
+  const value = parseWon(price);
+  if (value === null) return "-";
+
+  return formatWon(value);
+}
+
+function filledDailyPngRows(section: DealerSection): DailyPngRow[] {
+  return section.rows
+    .map((row) => ({
+      partNumber: formatPartNumberForFax(row.partNumber),
+      quantity: normalizeQuantity(row.quantity),
+      price: formatPriceForDailyPng(row.price),
+    }))
+    .filter((row) => row.partNumber);
+}
+
 function sanitizeFileName(value: string) {
   return value.trim().replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, "_");
 }
@@ -433,6 +463,15 @@ function drawCanvasText(
     clippedText = clippedText.slice(0, -1);
   }
   context.fillText(`${clippedText}...`, x, y);
+}
+
+function drawCanvasRightText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  rightX: number,
+  y: number,
+) {
+  context.fillText(text, rightX - context.measureText(text).width, y);
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement) {
@@ -543,6 +582,203 @@ async function makeFaxImageFile(orderDate: string, section: DealerSection, secti
 
   const blob = await canvasToBlob(canvas);
   return new File([blob], fileName || `mobis-fax-${sectionIndex + 1}.png`, {
+    type: "image/png",
+  });
+}
+
+async function makeDailyOrderImageFile(orderDate: string, sections: DealerSection[]) {
+  const width = 1240;
+  const height = 1754;
+  const margin = 64;
+  const footerHeight = 58;
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("이미지를 만들지 못했습니다.");
+  }
+
+  const printableSections = sections
+    .map((section, index) => ({
+      index,
+      section,
+      rows: filledDailyPngRows(section),
+    }))
+    .filter(({ section, rows }) => {
+      return Boolean(
+        normalizeDealer(section.dealer) ||
+          normalizeContact(section.dealerPhone) ||
+          normalizeContact(section.dealerFax) ||
+          normalizeContact(section.dealerAddress) ||
+          rows.length > 0,
+      );
+    });
+  const itemRowCount = printableSections.reduce(
+    (count, item) => count + Math.ceil(item.rows.length / 2),
+    0,
+  );
+  const sectionOverhead = printableSections.length > 4 ? 118 : 138;
+  const headerBottom = 132;
+  const footerTop = height - margin - footerHeight;
+  const availableItemHeight =
+    footerTop - headerBottom - printableSections.length * sectionOverhead - 18;
+  const itemRowHeight =
+    itemRowCount > 0
+      ? Math.max(22, Math.min(34, Math.floor(availableItemHeight / itemRowCount)))
+      : 30;
+  const isCompact = itemRowHeight < 28 || printableSections.length > 4;
+  const dealerFontSize = isCompact ? 18 : 22;
+  const infoFontSize = isCompact ? 13 : 15;
+  const partFontSize = Math.max(12, Math.min(isCompact ? 14 : 16, itemRowHeight - 8));
+  const contentWidth = width - margin * 2;
+  const columnGap = 20;
+  const columnWidth = (contentWidth - columnGap) / 2;
+  const fileName = `${sanitizeFileName(orderDate || todayInSeoul())}-오늘-총-주문.png`;
+
+  canvas.width = width;
+  canvas.height = height;
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.textBaseline = "top";
+
+  context.fillStyle = "#17211c";
+  context.font = '500 34px "Malgun Gothic", Arial, sans-serif';
+  drawCanvasText(context, `${orderDate || todayInSeoul()} 전체 주문 내역`, margin, 48, contentWidth);
+
+  context.fillStyle = "#617069";
+  context.font = '400 16px "Malgun Gothic", Arial, sans-serif';
+  drawCanvasText(
+    context,
+    `대리점 ${printableSections.length}곳`,
+    margin,
+    94,
+    contentWidth / 2,
+  );
+  drawCanvasRightText(
+    context,
+    `작성 총액 ${formatWon(sections.reduce((total, section) => total + sectionTotalAmount(section.rows), 0))}`,
+    width - margin,
+    94,
+  );
+
+  context.strokeStyle = "#d9dfdc";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(margin, 122);
+  context.lineTo(width - margin, 122);
+  context.stroke();
+
+  let y = headerBottom;
+  let overflowCount = 0;
+
+  if (printableSections.length === 0) {
+    context.fillStyle = "#617069";
+    context.font = '400 22px "Malgun Gothic", Arial, sans-serif';
+    context.fillText("입력된 주문 내용이 없습니다.", margin, y + 20);
+  }
+
+  printableSections.forEach(({ section, rows, index }) => {
+    if (y + sectionOverhead > footerTop - 10) {
+      overflowCount += Math.max(1, rows.length);
+      return;
+    }
+
+    const dealerName = normalizeDealer(section.dealer) || `대리점 ${index + 1}`;
+    const phone = normalizeContact(section.dealerPhone) || "-";
+    const fax = normalizeContact(section.dealerFax) || "-";
+    const address = normalizeContact(section.dealerAddress) || "-";
+    const sectionTotal = sectionTotalAmount(section.rows);
+
+    context.fillStyle = "#f8fbf9";
+    context.fillRect(margin, y, contentWidth, isCompact ? 34 : 40);
+
+    context.fillStyle = "#17211c";
+    context.font = `500 ${dealerFontSize}px "Malgun Gothic", Arial, sans-serif`;
+    drawCanvasText(context, dealerName, margin + 12, y + (isCompact ? 7 : 8), contentWidth - 24);
+    y += isCompact ? 42 : 50;
+
+    context.fillStyle = "#4d5d55";
+    context.font = `400 ${infoFontSize}px "Malgun Gothic", Arial, sans-serif`;
+    drawCanvasText(context, `전화 ${phone}   팩스 ${fax}`, margin + 4, y, contentWidth - 8);
+    y += isCompact ? 20 : 24;
+    drawCanvasText(context, `주소 ${address}`, margin + 4, y, contentWidth - 8);
+    y += isCompact ? 24 : 30;
+
+    if (rows.length === 0) {
+      context.fillStyle = "#617069";
+      context.font = `400 ${partFontSize}px "Malgun Gothic", Arial, sans-serif`;
+      context.fillText("입력된 파츠넘버가 없습니다.", margin + 4, y);
+      y += itemRowHeight;
+    }
+
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 2) {
+      if (y + itemRowHeight > footerTop - 74) {
+        overflowCount += rows.length - rowIndex;
+        break;
+      }
+
+      [rows[rowIndex], rows[rowIndex + 1]].forEach((item, columnIndex) => {
+        if (!item) return;
+
+        const x = margin + columnIndex * (columnWidth + columnGap);
+        const text = `${item.partNumber} ${item.quantity}개 ${item.price}`;
+
+        context.strokeStyle = "#edf0ee";
+        context.lineWidth = 1;
+        context.strokeRect(x, y, columnWidth, itemRowHeight - 4);
+
+        context.fillStyle = "#17211c";
+        context.font = `400 ${partFontSize}px "Malgun Gothic", Arial, sans-serif`;
+        drawCanvasText(context, text, x + 10, y + 5, columnWidth - 20);
+      });
+
+      y += itemRowHeight;
+    }
+
+    y += isCompact ? 4 : 8;
+    context.fillStyle = "#17211c";
+    context.font = `500 ${isCompact ? 15 : 17}px "Malgun Gothic", Arial, sans-serif`;
+    drawCanvasRightText(context, `대리점 합계 ${formatWon(sectionTotal)}`, width - margin, y);
+    y += isCompact ? 24 : 30;
+
+    context.strokeStyle = "#d9dfdc";
+    context.beginPath();
+    context.moveTo(margin, y);
+    context.lineTo(width - margin, y);
+    context.stroke();
+    y += isCompact ? 12 : 18;
+  });
+
+  if (overflowCount > 0) {
+    context.fillStyle = "#8a3d1c";
+    context.font = '400 14px "Malgun Gothic", Arial, sans-serif';
+    drawCanvasText(
+      context,
+      `내용이 많아 ${overflowCount}개 항목은 한 장에 다 들어가지 않았습니다.`,
+      margin,
+      Math.min(y, footerTop - 34),
+      contentWidth,
+    );
+  }
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(margin, footerTop, contentWidth, footerHeight);
+  context.strokeStyle = "#265f47";
+  context.lineWidth = 2;
+  context.strokeRect(margin, footerTop, contentWidth, footerHeight);
+  context.fillStyle = "#17211c";
+  context.font = '500 24px "Malgun Gothic", Arial, sans-serif';
+  drawCanvasText(context, "날짜별 총 금액", margin + 18, footerTop + 16, contentWidth / 2);
+  drawCanvasRightText(
+    context,
+    formatWon(sections.reduce((total, section) => total + sectionTotalAmount(section.rows), 0)),
+    width - margin - 18,
+    footerTop + 16,
+  );
+
+  const blob = await canvasToBlob(canvas);
+  return new File([blob], fileName || "오늘-총-주문.png", {
     type: "image/png",
   });
 }
@@ -718,9 +954,10 @@ export default function Home() {
   const [sections, setSections] = useState<DealerSection[]>([makeDealerSection()]);
   const [dealers, setDealers] = useState<DealerInfo[]>([]);
   const [activeDealerListSectionId, setActiveDealerListSectionId] = useState<string | null>(null);
-  const [isGrandTotalOpen, setIsGrandTotalOpen] = useState(false);
   const [sharingSectionId, setSharingSectionId] = useState<string | null>(null);
   const [faxPreview, setFaxPreview] = useState<FaxPreview | null>(null);
+  const [dailyPngPreview, setDailyPngPreview] = useState<DailyPngPreview | null>(null);
+  const [isDailyPngPreparing, setIsDailyPngPreparing] = useState(false);
   const [dailyOrders, setDailyOrders] = useState<DailyOrderBook>({});
   const [calendarMonth, setCalendarMonth] = useState(() => monthKeyFromDate(todayInSeoul()));
   const [activeQuarter, setActiveQuarter] = useState<1 | 2 | null>(null);
@@ -796,9 +1033,9 @@ export default function Home() {
     setSections(restoredSections);
     setDealers(mergeDealers([...collectedDealers, ...dealersFromSections(restoredSections)]));
     setActiveDealerListSectionId(null);
-    setIsGrandTotalOpen(false);
     setSharingSectionId(null);
     setFaxPreview(null);
+    setDailyPngPreview(null);
     setIsOrderEditing(!hasSavedRows(restoredSections));
     setIsStorageLoaded(true);
   }, []);
@@ -834,6 +1071,12 @@ export default function Home() {
       if (faxPreview?.url) URL.revokeObjectURL(faxPreview.url);
     };
   }, [faxPreview?.url]);
+
+  useEffect(() => {
+    return () => {
+      if (dailyPngPreview?.url) URL.revokeObjectURL(dailyPngPreview.url);
+    };
+  }, [dailyPngPreview?.url]);
 
   const visibleDealers = useMemo(
     () => mergeDealers(dealers.map(dealerFromSaved).filter(isDealerInfo)),
@@ -934,9 +1177,9 @@ export default function Home() {
 
   function resetOpenPanels() {
     setActiveDealerListSectionId(null);
-    setIsGrandTotalOpen(false);
     setSharingSectionId(null);
     setFaxPreview(null);
+    setDailyPngPreview(null);
   }
 
   function saveCurrentDateToBook() {
@@ -1352,6 +1595,26 @@ export default function Home() {
     }
   }
 
+  async function makeDailyOrderPng() {
+    setIsDailyPngPreparing(true);
+
+    try {
+      const file = await makeDailyOrderImageFile(orderDate, sections);
+      const url = URL.createObjectURL(file);
+
+      setDailyPngPreview({
+        date: orderDate,
+        fileName: file.name,
+        url,
+        file,
+      });
+    } catch {
+      window.alert("오늘 총 주문 PNG를 만들지 못했습니다. 다시 시도해 주세요.");
+    } finally {
+      setIsDailyPngPreparing(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <section className="app-container">
@@ -1555,25 +1818,67 @@ export default function Home() {
                 />
               </label>
               <div className="grand-total-control">
-                <button
-                  aria-expanded={isGrandTotalOpen}
-                  aria-label="총금액 보기"
-                  className="grand-total-button"
-                  type="button"
-                  onClick={() => setIsGrandTotalOpen((current) => !current)}
-                >
+                <div aria-label="총금액" className="grand-total-button">
                   <span>총금액</span>
-                </button>
-                {isGrandTotalOpen ? (
-                  <div
-                    aria-label={`총금액 ${formatWon(grandTotal)}`}
-                    className="grand-total-amount"
-                  >
-                    <strong>{formatWon(grandTotal)}</strong>
-                  </div>
-                ) : null}
+                </div>
+                <div
+                  aria-label={`총금액 ${formatWon(grandTotal)}`}
+                  className="grand-total-amount"
+                >
+                  <strong>{formatWon(grandTotal)}</strong>
+                </div>
               </div>
+              <button
+                className="command-button primary daily-png-button"
+                disabled={isDailyPngPreparing}
+                type="button"
+                onClick={makeDailyOrderPng}
+              >
+                {isDailyPngPreparing ? "준비중" : "오늘 총 주문 png 만들기"}
+              </button>
             </section>
+
+            {dailyPngPreview ? (
+              <div className="fax-preview-panel daily-png-preview-panel">
+                <div className="fax-preview-image-shell daily-png-image-shell">
+                  <Image
+                    alt={`${dailyPngPreview.date} 전체 주문 PNG`}
+                    className="fax-preview-image"
+                    height={255}
+                    src={dailyPngPreview.url}
+                    style={{
+                      height: "100%",
+                      objectFit: "cover",
+                      objectPosition: "top left",
+                      width: "100%",
+                    }}
+                    unoptimized
+                    width={180}
+                  />
+                </div>
+                <div className="fax-preview-detail">
+                  <strong>오늘 총 주문 PNG 준비됨</strong>
+                  <span>{dailyPngPreview.fileName}</span>
+                </div>
+                <div className="fax-preview-actions">
+                  <a
+                    className="command-button primary"
+                    download={dailyPngPreview.fileName}
+                    href={dailyPngPreview.url}
+                  >
+                    PNG 저장
+                  </a>
+                  <button
+                    aria-label="오늘 총 주문 PNG 미리보기 닫기"
+                    className="icon-button"
+                    type="button"
+                    onClick={() => setDailyPngPreview(null)}
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             <div className="dealer-sections">
               {sections.map((section, sectionIndex) => (

@@ -268,6 +268,7 @@ button:disabled:not(.fax-share-button) {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  gap: 12px;
 }
 
 .order-date-control {
@@ -300,11 +301,6 @@ button:disabled:not(.fax-share-button) {
   font-weight: 900;
 }
 
-.grand-total-button[aria-expanded="true"] {
-  border-color: #265f47;
-  box-shadow: 0 0 0 3px rgba(47, 111, 84, 0.12);
-}
-
 .grand-total-amount {
   display: inline-flex;
   height: 40px;
@@ -322,6 +318,20 @@ button:disabled:not(.fax-share-button) {
   font-size: 16px;
   font-weight: 900;
   line-height: 1;
+}
+
+.daily-png-button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.daily-png-preview-panel {
+  border-bottom: 1px solid #edf0ee;
+}
+
+.daily-png-image-shell {
+  width: 82px;
+  height: 116px;
 }
 
 .calendar-band {
@@ -1044,6 +1054,10 @@ button:disabled:not(.fax-share-button) {
   }
 
   .grand-total-amount {
+    width: 100%;
+  }
+
+  .daily-png-button {
     width: 100%;
   }
 
