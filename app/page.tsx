@@ -1,7 +1,16 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import {
+  Cloud,
+  CloudOff,
+  Download,
+  LoaderCircle,
+  RefreshCw,
+  Smartphone,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type PartInfo = {
   price: string;
@@ -93,6 +102,44 @@ type PartRankingItem = {
   quantity: number;
 };
 
+type DeletedOrderDates = Record<string, string>;
+
+type CloudSyncPayload = {
+  version: 1;
+  dailyOrders: DailyOrderBook;
+  dealers: DealerInfo[];
+  deletedDates: DeletedOrderDates;
+  lastOrderDate: string;
+};
+
+type CloudStateResponse = {
+  connected?: boolean;
+  message?: string;
+  revision?: number;
+  state?: unknown;
+  updatedAt?: string | null;
+};
+
+type CloudSyncStatus =
+  | "checking"
+  | "needs-pairing"
+  | "syncing"
+  | "synced"
+  | "offline"
+  | "error";
+
+type SyncSnapshot = {
+  dailyOrders: DailyOrderBook;
+  dealers: DealerInfo[];
+  deletedDates: DeletedOrderDates;
+  orderDate: string;
+};
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
+
 const senderFaxLine =
   process.env.NEXT_PUBLIC_FAX_SENDER_LINE ?? "명성모터스 010-5567-0102";
 const faxClosingLine = "없는 부품 문자 부탁드립니다.";
@@ -103,6 +150,7 @@ const storageKey = "mobis-daily-parts-v2";
 const dailyStorageKey = "mobis-daily-orders-v3";
 const lastOrderDateKey = "mobis-last-order-date-v3";
 const dealerStorageKey = "mobis-dealers-v2";
+const deletedDatesStorageKey = "mobis-deleted-order-dates-v1";
 const legacyStorageKeys = ["mobis-daily-parts-v1", "mobis-dealers-v1"];
 const resetStorageOnceKey = "mobis-cleanup-20260810-v1";
 const cleanupStorageKeys = legacyStorageKeys;
@@ -933,6 +981,143 @@ function hasSavedRows(savedSections: SavedDealerSection[] | undefined) {
   );
 }
 
+function timestampValue(value: string | undefined) {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function restoreDeletedDates(value: unknown): DeletedOrderDates {
+  if (!isRecord(value)) return {};
+
+  return Object.entries(value)
+    .filter(
+      ([date, deletedAt]) =>
+        /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+        typeof deletedAt === "string" &&
+        timestampValue(deletedAt) > 0,
+    )
+    .sort(([left], [right]) => left.localeCompare(right))
+    .reduce<DeletedOrderDates>((dates, [date, deletedAt]) => {
+      dates[date] = deletedAt as string;
+      return dates;
+    }, {});
+}
+
+function makeCloudSyncPayload(
+  dailyOrders: DailyOrderBook,
+  dealers: DealerInfo[],
+  deletedDates: DeletedOrderDates,
+  lastOrderDate: string,
+): CloudSyncPayload {
+  const restoredOrders = restoreDailyOrders(dailyOrders);
+  const restoredDeletedDates = restoreDeletedDates(deletedDates);
+  const normalizedOrders: DailyOrderBook = {};
+  const normalizedDeletedDates: DeletedOrderDates = {};
+  const allDates = new Set([
+    ...Object.keys(restoredOrders),
+    ...Object.keys(restoredDeletedDates),
+  ]);
+
+  [...allDates].sort().forEach((date) => {
+    const order = restoredOrders[date];
+    const deletedAt = restoredDeletedDates[date];
+    const orderAt = timestampValue(order?.updatedAt);
+    const deletionAt = timestampValue(deletedAt);
+
+    if (deletedAt && deletionAt >= orderAt) {
+      normalizedDeletedDates[date] = deletedAt;
+      return;
+    }
+
+    if (order && hasSavedRows(order.sections)) {
+      normalizedOrders[date] = order;
+    }
+  });
+
+  return {
+    version: 1,
+    dailyOrders: normalizedOrders,
+    dealers: mergeDealers(dealers.map(dealerFromSaved).filter(isDealerInfo)),
+    deletedDates: normalizedDeletedDates,
+    lastOrderDate: /^\d{4}-\d{2}-\d{2}$/.test(lastOrderDate)
+      ? lastOrderDate
+      : todayInSeoul(),
+  };
+}
+
+function restoreCloudSyncPayload(value: unknown): CloudSyncPayload | null {
+  if (!isRecord(value)) return null;
+
+  const dailyOrders = restoreDailyOrders(value.dailyOrders);
+  const dealers = Array.isArray(value.dealers)
+    ? value.dealers.map(dealerFromSaved).filter(isDealerInfo)
+    : [];
+  const deletedDates = restoreDeletedDates(value.deletedDates);
+  const lastOrderDate = stringValue(value.lastOrderDate) || todayInSeoul();
+
+  return makeCloudSyncPayload(dailyOrders, dealers, deletedDates, lastOrderDate);
+}
+
+function mergeCloudSyncPayloads(
+  localPayload: CloudSyncPayload,
+  remotePayload: CloudSyncPayload,
+) {
+  const dailyOrders: DailyOrderBook = {};
+  const deletedDates: DeletedOrderDates = {};
+  const allDates = new Set([
+    ...Object.keys(localPayload.dailyOrders),
+    ...Object.keys(remotePayload.dailyOrders),
+    ...Object.keys(localPayload.deletedDates),
+    ...Object.keys(remotePayload.deletedDates),
+  ]);
+
+  [...allDates].sort().forEach((date) => {
+    const candidates: Array<
+      | { kind: "order"; at: number; order: SavedDailyOrder }
+      | { kind: "deleted"; at: number; deletedAt: string }
+    > = [];
+    const remoteOrder = remotePayload.dailyOrders[date];
+    const localOrder = localPayload.dailyOrders[date];
+    const remoteDeletedAt = remotePayload.deletedDates[date];
+    const localDeletedAt = localPayload.deletedDates[date];
+
+    if (remoteOrder) {
+      candidates.push({ kind: "order", at: timestampValue(remoteOrder.updatedAt), order: remoteOrder });
+    }
+    if (remoteDeletedAt) {
+      candidates.push({ kind: "deleted", at: timestampValue(remoteDeletedAt), deletedAt: remoteDeletedAt });
+    }
+    if (localOrder) {
+      candidates.push({ kind: "order", at: timestampValue(localOrder.updatedAt), order: localOrder });
+    }
+    if (localDeletedAt) {
+      candidates.push({ kind: "deleted", at: timestampValue(localDeletedAt), deletedAt: localDeletedAt });
+    }
+
+    const winner = candidates.reduce<(typeof candidates)[number] | null>(
+      (latest, candidate) => (!latest || candidate.at >= latest.at ? candidate : latest),
+      null,
+    );
+
+    if (winner?.kind === "order") {
+      dailyOrders[date] = winner.order;
+    } else if (winner?.kind === "deleted") {
+      deletedDates[date] = winner.deletedAt;
+    }
+  });
+
+  return makeCloudSyncPayload(
+    dailyOrders,
+    mergeDealers([...remotePayload.dealers, ...localPayload.dealers]),
+    deletedDates,
+    localPayload.lastOrderDate || remotePayload.lastOrderDate,
+  );
+}
+
+function cloudPayloadsMatch(left: CloudSyncPayload, right: CloudSyncPayload) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function makeDailySnapshot(sections: DealerSection[]): SavedDailyOrder {
   return {
     sections,
@@ -996,6 +1181,26 @@ export default function Home() {
   const [activeQuarter, setActiveQuarter] = useState<1 | 2 | null>(null);
   const [isOrderEditing, setIsOrderEditing] = useState(true);
   const [isStorageLoaded, setIsStorageLoaded] = useState(false);
+  const [deletedDates, setDeletedDates] = useState<DeletedOrderDates>({});
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>("checking");
+  const [isCloudConnected, setIsCloudConnected] = useState(false);
+  const [connectionCode, setConnectionCode] = useState("");
+  const [connectionError, setConnectionError] = useState("");
+  const [lastCloudSyncAt, setLastCloudSyncAt] = useState<string | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isInstallGuideOpen, setIsInstallGuideOpen] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const cloudSaveTimerRef = useRef<number | null>(null);
+  const cloudPullInFlightRef = useRef(false);
+  const cloudReadyRef = useRef(false);
+  const initialCloudCheckRef = useRef(false);
+  const suppressNextCloudSaveRef = useRef(false);
+  const latestSyncSnapshotRef = useRef<SyncSnapshot>({
+    dailyOrders: {},
+    dealers: [],
+    deletedDates: {},
+    orderDate: todayInSeoul(),
+  });
 
   useEffect(() => {
     if (!window.localStorage.getItem(resetStorageOnceKey)) {
@@ -1007,8 +1212,10 @@ export default function Home() {
     const savedDailyOrders = window.localStorage.getItem(dailyStorageKey);
     const savedDealers = window.localStorage.getItem(dealerStorageKey);
     const savedLastOrderDate = window.localStorage.getItem(lastOrderDateKey);
+    const savedDeletedDates = window.localStorage.getItem(deletedDatesStorageKey);
     const collectedDealers: DealerInfo[] = [];
     let restoredDailyOrders: DailyOrderBook = {};
+    let restoredDeletedDates: DeletedOrderDates = {};
     let fallbackDate = todayInSeoul();
 
     if (savedDealers) {
@@ -1027,6 +1234,14 @@ export default function Home() {
         restoredDailyOrders = restoreDailyOrders(JSON.parse(savedDailyOrders) as unknown);
       } catch {
         window.localStorage.removeItem(dailyStorageKey);
+      }
+    }
+
+    if (savedDeletedDates) {
+      try {
+        restoredDeletedDates = restoreDeletedDates(JSON.parse(savedDeletedDates) as unknown);
+      } catch {
+        window.localStorage.removeItem(deletedDatesStorageKey);
       }
     }
 
@@ -1058,13 +1273,27 @@ export default function Home() {
     }
 
     const selectedDate = savedLastOrderDate || fallbackDate;
-    const restoredSections = restoreSavedSections(restoredDailyOrders[selectedDate]?.sections);
+    const restoredPayload = makeCloudSyncPayload(
+      restoredDailyOrders,
+      collectedDealers,
+      restoredDeletedDates,
+      selectedDate,
+    );
+    const restoredSections = restoreSavedSections(
+      restoredPayload.dailyOrders[selectedDate]?.sections,
+    );
 
-    setDailyOrders(restoredDailyOrders);
+    setDailyOrders(restoredPayload.dailyOrders);
     setOrderDate(selectedDate);
     setCalendarMonth(monthKeyFromDate(selectedDate));
     setSections(restoredSections);
-    setDealers(mergeDealers([...collectedDealers, ...dealersFromSections(restoredSections)]));
+    setDealers(
+      mergeDealers([
+        ...restoredPayload.dealers,
+        ...dealersFromSections(restoredSections),
+      ]),
+    );
+    setDeletedDates(restoredPayload.deletedDates);
     setActiveDealerListSectionId(null);
     setSharingSectionId(null);
     setFaxPreview(null);
@@ -1075,9 +1304,15 @@ export default function Home() {
 
   useEffect(() => {
     if (!isStorageLoaded) return;
-    const currentSnapshot = makeDailySnapshot(sections);
 
     setDailyOrders((current) => {
+      const existingSnapshot = current[orderDate];
+      const sectionsHaveChanged =
+        JSON.stringify(existingSnapshot?.sections ?? []) !== JSON.stringify(sections);
+      const currentSnapshot =
+        existingSnapshot && !sectionsHaveChanged
+          ? existingSnapshot
+          : makeDailySnapshot(sections);
       const nextDailyOrders = {
         ...current,
         [orderDate]: currentSnapshot,
@@ -1087,9 +1322,20 @@ export default function Home() {
       window.localStorage.setItem(storageKey, JSON.stringify({ orderDate, sections }));
       window.localStorage.setItem(lastOrderDateKey, orderDate);
 
-      return nextDailyOrders;
+      return sectionsHaveChanged || !existingSnapshot ? nextDailyOrders : current;
     });
   }, [isStorageLoaded, orderDate, sections]);
+
+  useEffect(() => {
+    if (!isStorageLoaded || !hasSavedRows(sections) || !deletedDates[orderDate]) return;
+
+    setDeletedDates((current) => {
+      if (!current[orderDate]) return current;
+      const next = { ...current };
+      delete next[orderDate];
+      return next;
+    });
+  }, [deletedDates, isStorageLoaded, orderDate, sections]);
 
   useEffect(() => {
     if (!isStorageLoaded) return;
@@ -1098,6 +1344,83 @@ export default function Home() {
       JSON.stringify(mergeDealers(dealers.map(dealerFromSaved).filter(isDealerInfo))),
     );
   }, [dealers, isStorageLoaded]);
+
+  useEffect(() => {
+    if (!isStorageLoaded) return;
+    window.localStorage.setItem(deletedDatesStorageKey, JSON.stringify(deletedDates));
+  }, [deletedDates, isStorageLoaded]);
+
+  useEffect(() => {
+    latestSyncSnapshotRef.current = {
+      dailyOrders,
+      dealers,
+      deletedDates,
+      orderDate,
+    };
+  }, [dailyOrders, dealers, deletedDates, orderDate]);
+
+  useEffect(() => {
+    if (!isStorageLoaded || initialCloudCheckRef.current) return;
+    initialCloudCheckRef.current = true;
+    void pullCloudState("initial");
+  }, [isStorageLoaded]);
+
+  useEffect(() => {
+    if (!isStorageLoaded || !isCloudConnected || !cloudReadyRef.current) return;
+
+    if (suppressNextCloudSaveRef.current) {
+      suppressNextCloudSaveRef.current = false;
+      return;
+    }
+
+    if (cloudSaveTimerRef.current !== null) {
+      window.clearTimeout(cloudSaveTimerRef.current);
+    }
+
+    const payload = makeCloudSyncPayload(dailyOrders, dealers, deletedDates, orderDate);
+    setCloudSyncStatus("syncing");
+    cloudSaveTimerRef.current = window.setTimeout(() => {
+      cloudSaveTimerRef.current = null;
+      void pushCloudPayload(payload);
+    }, 900);
+
+    return () => {
+      if (cloudSaveTimerRef.current !== null) {
+        window.clearTimeout(cloudSaveTimerRef.current);
+        cloudSaveTimerRef.current = null;
+      }
+    };
+  }, [dailyOrders, dealers, deletedDates, isCloudConnected, isStorageLoaded, orderDate]);
+
+  useEffect(() => {
+    if (!isCloudConnected) return;
+
+    const refreshFromCloud = () => {
+      if (document.visibilityState === "visible") void pullCloudState("refresh");
+    };
+
+    window.addEventListener("focus", refreshFromCloud);
+    window.addEventListener("online", refreshFromCloud);
+    return () => {
+      window.removeEventListener("focus", refreshFromCloud);
+      window.removeEventListener("online", refreshFromCloud);
+    };
+  }, [isCloudConnected]);
+
+  useEffect(() => {
+    const standalone =
+      window.matchMedia("(display-mode: standalone)").matches ||
+      ("standalone" in navigator && Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
+    setIsStandalone(standalone);
+
+    const handleInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleInstallPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", handleInstallPrompt);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -1218,6 +1541,192 @@ export default function Home() {
 
   const isOrderReadOnly = hasOrderContent && !isOrderEditing;
 
+  const cloudStatusLabel =
+    cloudSyncStatus === "checking"
+      ? "클라우드 확인 중"
+      : cloudSyncStatus === "needs-pairing"
+        ? "기기 연결 필요"
+        : cloudSyncStatus === "syncing"
+          ? "저장 중"
+          : cloudSyncStatus === "synced"
+            ? "클라우드 저장됨"
+            : cloudSyncStatus === "offline"
+              ? "오프라인 저장"
+              : "동기화 확인 필요";
+
+  function applyCloudPayload(payload: CloudSyncPayload) {
+    const selectedDate = latestSyncSnapshotRef.current.orderDate || payload.lastOrderDate;
+    const normalized = makeCloudSyncPayload(
+      payload.dailyOrders,
+      payload.dealers,
+      payload.deletedDates,
+      selectedDate,
+    );
+    const nextSections = restoreSavedSections(
+      normalized.dailyOrders[selectedDate]?.sections,
+    );
+
+    suppressNextCloudSaveRef.current = true;
+    latestSyncSnapshotRef.current = {
+      dailyOrders: normalized.dailyOrders,
+      dealers: normalized.dealers,
+      deletedDates: normalized.deletedDates,
+      orderDate: selectedDate,
+    };
+
+    setDailyOrders(normalized.dailyOrders);
+    setDealers(
+      mergeDealers([
+        ...normalized.dealers,
+        ...dealersFromSections(nextSections),
+      ]),
+    );
+    setDeletedDates(normalized.deletedDates);
+    setOrderDate(selectedDate);
+    setCalendarMonth(monthKeyFromDate(selectedDate));
+    setSections(nextSections);
+    setIsOrderEditing(!hasSavedRows(nextSections));
+    resetOpenPanels();
+
+    window.localStorage.setItem(dailyStorageKey, JSON.stringify(normalized.dailyOrders));
+    window.localStorage.setItem(dealerStorageKey, JSON.stringify(normalized.dealers));
+    window.localStorage.setItem(
+      deletedDatesStorageKey,
+      JSON.stringify(normalized.deletedDates),
+    );
+    window.localStorage.setItem(storageKey, JSON.stringify({ orderDate: selectedDate, sections: nextSections }));
+    window.localStorage.setItem(lastOrderDateKey, selectedDate);
+  }
+
+  async function pushCloudPayload(payload: CloudSyncPayload) {
+    try {
+      setCloudSyncStatus("syncing");
+      const response = await fetch("/api/sync/state", {
+        body: JSON.stringify(payload),
+        headers: { "Content-Type": "application/json" },
+        method: "PUT",
+      });
+      const data = (await response.json()) as CloudStateResponse;
+
+      if (response.status === 401) {
+        cloudReadyRef.current = false;
+        setIsCloudConnected(false);
+        setCloudSyncStatus("needs-pairing");
+        return false;
+      }
+      if (!response.ok) {
+        throw new Error(data.message || "클라우드에 저장하지 못했습니다.");
+      }
+
+      setIsCloudConnected(true);
+      setLastCloudSyncAt(data.updatedAt || new Date().toISOString());
+      setCloudSyncStatus("synced");
+      return true;
+    } catch {
+      setCloudSyncStatus(navigator.onLine ? "error" : "offline");
+      return false;
+    }
+  }
+
+  async function pullCloudState(mode: "initial" | "refresh") {
+    if (cloudPullInFlightRef.current) return;
+    cloudPullInFlightRef.current = true;
+
+    try {
+      setCloudSyncStatus(mode === "initial" ? "checking" : "syncing");
+      const response = await fetch("/api/sync/state", {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      const data = (await response.json()) as CloudStateResponse;
+
+      if (response.status === 401) {
+        cloudReadyRef.current = false;
+        setIsCloudConnected(false);
+        setCloudSyncStatus("needs-pairing");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(data.message || "클라우드 자료를 불러오지 못했습니다.");
+      }
+
+      const snapshot = latestSyncSnapshotRef.current;
+      const localPayload = makeCloudSyncPayload(
+        snapshot.dailyOrders,
+        snapshot.dealers,
+        snapshot.deletedDates,
+        snapshot.orderDate,
+      );
+      const remotePayload = restoreCloudSyncPayload(data.state);
+
+      setIsCloudConnected(true);
+      cloudReadyRef.current = true;
+
+      if (!remotePayload) {
+        await pushCloudPayload(localPayload);
+        return;
+      }
+
+      const mergedPayload = mergeCloudSyncPayloads(localPayload, remotePayload);
+      applyCloudPayload(mergedPayload);
+
+      if (!cloudPayloadsMatch(mergedPayload, remotePayload)) {
+        await pushCloudPayload(mergedPayload);
+      } else {
+        setLastCloudSyncAt(data.updatedAt || new Date().toISOString());
+        setCloudSyncStatus("synced");
+      }
+    } catch {
+      setCloudSyncStatus(navigator.onLine ? "error" : "offline");
+    } finally {
+      cloudPullInFlightRef.current = false;
+    }
+  }
+
+  async function connectCloud() {
+    const normalizedCode = connectionCode.trim();
+    if (!normalizedCode) {
+      setConnectionError("연결 코드를 입력해 주세요.");
+      return;
+    }
+
+    try {
+      setConnectionError("");
+      setCloudSyncStatus("checking");
+      const response = await fetch("/api/sync/pair", {
+        body: JSON.stringify({ code: normalizedCode }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      const data = (await response.json()) as CloudStateResponse;
+
+      if (!response.ok) {
+        setCloudSyncStatus("needs-pairing");
+        setConnectionError(data.message || "연결 코드를 확인해 주세요.");
+        return;
+      }
+
+      setConnectionCode("");
+      setIsCloudConnected(true);
+      await pullCloudState("initial");
+    } catch {
+      setCloudSyncStatus(navigator.onLine ? "error" : "offline");
+      setConnectionError("연결하지 못했습니다. 인터넷 연결을 확인해 주세요.");
+    }
+  }
+
+  async function installApp() {
+    if (installPrompt) {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice.outcome === "accepted") setIsStandalone(true);
+      setInstallPrompt(null);
+      return;
+    }
+
+    setIsInstallGuideOpen(true);
+  }
+
   function resetOpenPanels() {
     setActiveDealerListSectionId(null);
     setSharingSectionId(null);
@@ -1233,6 +1742,11 @@ export default function Home() {
   }
 
   function refreshPartRanking() {
+    if (isCloudConnected) {
+      void pullCloudState("refresh");
+      return;
+    }
+
     let storedDailyOrders = dailyOrders;
     const savedDailyOrders = window.localStorage.getItem(dailyStorageKey);
 
@@ -1632,6 +2146,10 @@ export default function Home() {
     if (isOrderReadOnly) return;
     if (!window.confirm("정말 새로시작을 할까요?")) return;
 
+    setDeletedDates((current) => ({
+      ...current,
+      [orderDate]: new Date().toISOString(),
+    }));
     setSections([makeDealerSection()]);
     setIsOrderEditing(true);
     resetOpenPanels();
@@ -1692,7 +2210,79 @@ export default function Home() {
               날짜별 주문 파츠의 원화 가격을 빠르게 기록합니다.
             </p>
           </div>
+          <div className="app-header-actions">
+            <div
+              className={`cloud-status ${cloudSyncStatus}`}
+              title={lastCloudSyncAt ? `최근 저장 ${new Date(lastCloudSyncAt).toLocaleString("ko-KR")}` : undefined}
+            >
+              {cloudSyncStatus === "checking" || cloudSyncStatus === "syncing" ? (
+                <LoaderCircle aria-hidden="true" className="spin" size={17} />
+              ) : cloudSyncStatus === "synced" ? (
+                <Cloud aria-hidden="true" size={17} />
+              ) : (
+                <CloudOff aria-hidden="true" size={17} />
+              )}
+              <span aria-live="polite">{cloudStatusLabel}</span>
+              <button
+                aria-label="클라우드 자료 새로고침"
+                className="header-icon-button"
+                disabled={!isCloudConnected || cloudSyncStatus === "syncing"}
+                title="클라우드 자료 새로고침"
+                type="button"
+                onClick={() => void pullCloudState("refresh")}
+              >
+                <RefreshCw aria-hidden="true" size={16} />
+              </button>
+            </div>
+            {!isStandalone ? (
+              <button
+                className="install-app-button"
+                type="button"
+                onClick={() => void installApp()}
+              >
+                <Download aria-hidden="true" size={17} />
+                <span>앱 설치</span>
+              </button>
+            ) : null}
+          </div>
         </header>
+
+        {cloudSyncStatus === "needs-pairing" ? (
+          <form
+            className="device-pair-panel"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void connectCloud();
+            }}
+          >
+            <div className="device-pair-copy">
+              <Cloud aria-hidden="true" size={20} />
+              <div>
+                <strong>이 기기를 공용 주문장에 연결</strong>
+                <span>처음 한 번만 연결 코드를 입력하면 이후에는 자동 저장됩니다.</span>
+              </div>
+            </div>
+            <div className="device-pair-controls">
+              <input
+                aria-label="기기 연결 코드"
+                autoCapitalize="characters"
+                autoComplete="one-time-code"
+                className="field connection-code-field"
+                placeholder="연결 코드"
+                value={connectionCode}
+                onChange={(event) => setConnectionCode(event.target.value.toUpperCase())}
+              />
+              <button className="command-button primary" type="submit">
+                연결
+              </button>
+            </div>
+            {connectionError ? (
+              <span className="device-pair-error" role="alert">
+                {connectionError}
+              </span>
+            ) : null}
+          </form>
+        ) : null}
 
         <section className="order-workspace">
           <div className="order-layout">
@@ -1854,7 +2444,7 @@ export default function Home() {
                   type="button"
                   onClick={refreshPartRanking}
                 >
-                  <span aria-hidden="true">↻</span>
+                  <RefreshCw aria-hidden="true" size={15} />
                   새로고침
                 </button>
               </div>
@@ -2233,7 +2823,7 @@ export default function Home() {
                       <tbody>
                         {section.rows.map((row) => (
                           <tr key={row.id} className="order-row">
-                            <td className="table-cell">
+                            <td className="table-cell part-cell" data-label="파츠넘버">
                               <input
                                 aria-label="파츠넘버"
                                 className="field part-number-field"
@@ -2256,7 +2846,7 @@ export default function Home() {
                                 }}
                               />
                             </td>
-                            <td className="table-cell">
+                            <td className="table-cell quantity-cell" data-label="갯수">
                               <select
                                 aria-label="갯수"
                                 className="field quantity-select"
@@ -2273,7 +2863,7 @@ export default function Home() {
                                 ))}
                               </select>
                             </td>
-                            <td className="table-cell">
+                            <td className="table-cell confirm-cell" data-label="확인">
                               <button
                                 className="confirm-button"
                                 disabled={isOrderReadOnly}
@@ -2283,7 +2873,7 @@ export default function Home() {
                                 {isChecking(row.status) ? "조회중" : "확인"}
                               </button>
                             </td>
-                            <td className="table-cell">
+                            <td className="table-cell price-cell" data-label="가격(원)">
                               <input
                                 aria-label="가격"
                                 className="field"
@@ -2295,10 +2885,10 @@ export default function Home() {
                                 }
                               />
                             </td>
-                            <td className="table-cell">
+                            <td className="table-cell status-cell" data-label="상태">
                               <StatusBadge status={row.status} />
                             </td>
-                            <td className="table-cell delete-cell">
+                            <td className="table-cell delete-cell" data-label="삭제">
                               <button
                                 aria-label="행 삭제"
                                 className="icon-button"
@@ -2322,6 +2912,43 @@ export default function Home() {
 
         </section>
       </section>
+
+      {isInstallGuideOpen ? (
+        <div
+          className="install-guide-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setIsInstallGuideOpen(false);
+          }}
+        >
+          <section
+            aria-labelledby="install-guide-title"
+            aria-modal="true"
+            className="install-guide-dialog"
+            role="dialog"
+          >
+            <div className="install-guide-header">
+              <div>
+                <Smartphone aria-hidden="true" size={22} />
+                <strong id="install-guide-title">아이폰에 앱 설치</strong>
+              </div>
+              <button
+                aria-label="앱 설치 안내 닫기"
+                className="header-icon-button"
+                type="button"
+                onClick={() => setIsInstallGuideOpen(false)}
+              >
+                <X aria-hidden="true" size={18} />
+              </button>
+            </div>
+            <ol className="install-guide-steps">
+              <li>Safari에서 이 주소를 엽니다.</li>
+              <li>화면 아래의 공유 버튼을 누릅니다.</li>
+              <li>홈 화면에 추가를 누른 뒤 추가를 선택합니다.</li>
+            </ol>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
