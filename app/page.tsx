@@ -88,6 +88,11 @@ type DailyPngRow = {
   price: string;
 };
 
+type PartRankingItem = {
+  partNumber: string;
+  quantity: number;
+};
+
 const senderFaxLine =
   process.env.NEXT_PUBLIC_FAX_SENDER_LINE ?? "명성모터스 010-5567-0102";
 const faxClosingLine = "없는 부품 문자 부탁드립니다.";
@@ -409,8 +414,12 @@ function sectionTotalAmount(rows: OrderRow[]) {
   }, 0);
 }
 
+function normalizePartNumber(partNumber: string) {
+  return partNumber.trim().toUpperCase().replace(/[^0-9A-Z]/g, "");
+}
+
 function formatPartNumberForFax(partNumber: string) {
-  const compactPartNumber = partNumber.trim().toUpperCase().replace(/[^0-9A-Z]/g, "");
+  const compactPartNumber = normalizePartNumber(partNumber);
   if (compactPartNumber.length <= 5) return compactPartNumber;
 
   return `${compactPartNumber.slice(0, 5)}-${compactPartNumber.slice(5)}`;
@@ -949,6 +958,30 @@ function savedSectionsTotalAmount(savedSections: SavedDealerSection[] | undefine
   );
 }
 
+function makePartRanking(orderBook: DailyOrderBook): PartRankingItem[] {
+  const quantities = new Map<string, number>();
+
+  Object.values(orderBook).forEach((order) => {
+    order.sections?.forEach((section) => {
+      section.rows?.forEach((row) => {
+        const partNumber = normalizePartNumber(stringValue(row.partNumber));
+        if (!partNumber) return;
+
+        quantities.set(
+          partNumber,
+          (quantities.get(partNumber) ?? 0) + normalizeQuantity(row.quantity),
+        );
+      });
+    });
+  });
+
+  return [...quantities.entries()]
+    .map(([partNumber, quantity]) => ({ partNumber, quantity }))
+    .sort((left, right) => {
+      return right.quantity - left.quantity || left.partNumber.localeCompare(right.partNumber, "en");
+    });
+}
+
 export default function Home() {
   const [orderDate, setOrderDate] = useState(todayInSeoul);
   const [sections, setSections] = useState<DealerSection[]>([makeDealerSection()]);
@@ -1123,6 +1156,16 @@ export default function Home() {
     [dailyOrders, orderDate, sections],
   );
 
+  const partRanking = useMemo(
+    () => makePartRanking(dailyOrdersWithCurrentDate),
+    [dailyOrdersWithCurrentDate],
+  );
+
+  const partRankingTotalQuantity = useMemo(
+    () => partRanking.reduce((total, item) => total + item.quantity, 0),
+    [partRanking],
+  );
+
   const calendarDailyTotals = useMemo(
     () =>
       Object.entries(dailyOrdersWithCurrentDate)
@@ -1187,6 +1230,27 @@ export default function Home() {
       ...dailyOrders,
       [orderDate]: makeDailySnapshot(sections),
     };
+  }
+
+  function refreshPartRanking() {
+    let storedDailyOrders = dailyOrders;
+    const savedDailyOrders = window.localStorage.getItem(dailyStorageKey);
+
+    if (savedDailyOrders) {
+      try {
+        storedDailyOrders = restoreDailyOrders(JSON.parse(savedDailyOrders) as unknown);
+      } catch {
+        storedDailyOrders = dailyOrders;
+      }
+    }
+
+    const nextDailyOrders = {
+      ...storedDailyOrders,
+      [orderDate]: makeDailySnapshot(sections),
+    };
+
+    window.localStorage.setItem(dailyStorageKey, JSON.stringify(nextDailyOrders));
+    setDailyOrders(nextDailyOrders);
   }
 
   function changeOrderDate(nextDate: string) {
@@ -1632,6 +1696,7 @@ export default function Home() {
 
         <section className="order-workspace">
           <div className="order-layout">
+            <aside className="order-sidebar">
             <section className="calendar-band" aria-label="날짜 달력">
               <div className="calendar-header">
                 <div className="calendar-title-group">
@@ -1773,6 +1838,46 @@ export default function Home() {
                 </div>
               </div>
             </section>
+
+            <section className="part-ranking-card" aria-label="파츠넘버 누적 구매 순위">
+              <div className="part-ranking-header">
+                <div className="part-ranking-title">
+                  <span>누적 구매 순위</span>
+                  <strong aria-live="polite">
+                    {partRanking.length}종 · {partRankingTotalQuantity.toLocaleString("ko-KR")}개
+                  </strong>
+                </div>
+                <button
+                  aria-label="파츠넘버 누적수량 새로고침"
+                  className="part-ranking-refresh"
+                  title="저장된 주문을 다시 불러옵니다"
+                  type="button"
+                  onClick={refreshPartRanking}
+                >
+                  <span aria-hidden="true">↻</span>
+                  새로고침
+                </button>
+              </div>
+
+              {partRanking.length > 0 ? (
+                <ol className="part-ranking-list">
+                  {partRanking.map((item, index) => (
+                    <li className="part-ranking-item" key={item.partNumber}>
+                      <span className="part-ranking-position">{index + 1}</span>
+                      <strong className="part-ranking-number">
+                        {formatPartNumberForFax(item.partNumber)}
+                      </strong>
+                      <span className="part-ranking-quantity">
+                        {item.quantity.toLocaleString("ko-KR")}개
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="part-ranking-empty">저장된 파츠넘버가 없습니다.</p>
+              )}
+            </section>
+            </aside>
 
             <div className="order-card order-main">
             <div className="order-toolbar">
