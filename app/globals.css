@@ -821,6 +821,10 @@ button:disabled:not(.fax-share-button) {
   background: #ffffff;
 }
 
+.dealer-order-section + .dealer-order-section {
+  border-top: 6px solid #6f9381;
+}
+
 .dealer-section-header {
   display: flex;
   min-height: 54px;
