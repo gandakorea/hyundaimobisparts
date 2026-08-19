@@ -53,10 +53,21 @@ async function ensureSyncSchema() {
           updated_at timestamptz not null default now()
         )
       `;
+      await sql`
+        create table if not exists private.mobis_app_state_history (
+          id bigint generated always as identity primary key,
+          app_id text not null,
+          payload jsonb not null,
+          revision bigint not null,
+          backed_up_at timestamptz not null default now()
+        )
+      `;
       await sql`revoke all on schema private from public`;
       await sql`revoke all on schema private from anon, authenticated`;
       await sql`revoke all on private.mobis_app_state from public`;
       await sql`revoke all on private.mobis_app_state from anon, authenticated`;
+      await sql`revoke all on private.mobis_app_state_history from public`;
+      await sql`revoke all on private.mobis_app_state_history from anon, authenticated`;
     })().catch((error) => {
       globalThis.mobisSyncSchemaReady = undefined;
       throw error;
@@ -66,11 +77,26 @@ async function ensureSyncSchema() {
   await globalThis.mobisSyncSchemaReady;
 }
 
+function normalizePayload(payload: unknown) {
+  let normalized = payload;
+
+  // Earlier releases stored JSON as a JSON string. Unwrap it while those rows are migrated.
+  for (let attempt = 0; attempt < 2 && typeof normalized === "string"; attempt += 1) {
+    try {
+      normalized = JSON.parse(normalized) as unknown;
+    } catch {
+      break;
+    }
+  }
+
+  return normalized;
+}
+
 function normalizeRow(row: DatabaseRow | undefined): StoredAppState | null {
   if (!row) return null;
 
   return {
-    payload: row.payload,
+    payload: normalizePayload(row.payload),
     revision: Number(row.revision),
     updatedAt: row.updated_at,
   };
@@ -92,17 +118,47 @@ export async function readAppState(appId: string) {
 export async function writeAppState(appId: string, payload: unknown) {
   await ensureSyncSchema();
   const sql = getSql();
-  const serializedPayload = JSON.stringify(payload);
-  const rows = await sql<DatabaseRow[]>`
-    insert into private.mobis_app_state (app_id, payload, revision, updated_at)
-    values (${appId}, ${serializedPayload}::jsonb, 1, now())
-    on conflict (app_id) do update
-    set
-      payload = excluded.payload,
-      revision = private.mobis_app_state.revision + 1,
-      updated_at = now()
-    returning payload, revision::text, updated_at::text
-  `;
+  const serializablePayload = JSON.parse(JSON.stringify(payload)) as postgres.JSONValue;
+  const rows = await sql.begin(async (transaction) => {
+    const currentRows = await transaction<DatabaseRow[]>`
+      select payload, revision::text, updated_at::text
+      from private.mobis_app_state
+      where app_id = ${appId}
+      for update
+    `;
+    const current = currentRows[0];
+
+    if (current) {
+      await transaction`
+        insert into private.mobis_app_state_history (app_id, payload, revision)
+        values (${appId}, ${transaction.json(current.payload as postgres.JSONValue)}, ${current.revision})
+      `;
+    }
+
+    const storedRows = await transaction<DatabaseRow[]>`
+      insert into private.mobis_app_state (app_id, payload, revision, updated_at)
+      values (${appId}, ${transaction.json(serializablePayload)}, 1, now())
+      on conflict (app_id) do update
+      set
+        payload = excluded.payload,
+        revision = private.mobis_app_state.revision + 1,
+        updated_at = now()
+      returning payload, revision::text, updated_at::text
+    `;
+
+    await transaction`
+      delete from private.mobis_app_state_history
+      where id in (
+        select id
+        from private.mobis_app_state_history
+        where app_id = ${appId}
+        order by id desc
+        offset 100
+      )
+    `;
+
+    return storedRows;
+  });
 
   const stored = normalizeRow(rows[0]);
   if (!stored) throw new Error("Cloud state could not be saved.");
