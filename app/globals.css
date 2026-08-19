@@ -146,10 +146,7 @@ button:disabled:not(.fax-share-button) {
 }
 
 .table-scroll {
-  max-height: 420px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  overflow-x: auto;
 }
 
 .order-table {
@@ -206,10 +203,6 @@ button:disabled:not(.fax-share-button) {
 }
 
 .table-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: #eef2ef;
   padding: 12px 14px;
   letter-spacing: 0;
 }
@@ -817,6 +810,10 @@ button:disabled:not(.fax-share-button) {
 
 .dealer-sections {
   display: grid;
+  max-height: clamp(440px, calc(100vh - 280px), 760px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .dealer-order-section {
