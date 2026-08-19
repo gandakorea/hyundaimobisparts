@@ -1631,7 +1631,7 @@ export default function Home() {
         </header>
 
         <section className="order-workspace">
-          <div className="order-card">
+          <div className="order-layout">
             <section className="calendar-band" aria-label="날짜 달력">
               <div className="calendar-header">
                 <div className="calendar-title-group">
@@ -1774,6 +1774,7 @@ export default function Home() {
               </div>
             </section>
 
+            <div className="order-card order-main">
             <div className="order-toolbar">
               <div className="order-toolbar-title">일별 주문 입력</div>
               <div className="order-toolbar-actions">
@@ -2210,6 +2211,7 @@ export default function Home() {
                   </div>
                 </section>
               ))}
+            </div>
             </div>
           </div>
 
