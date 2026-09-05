@@ -3,3 +3,7 @@ skills-lock.json
 AGENTS.md
 CLAUDE.md
 docs/
+work/
+outputs/
+.env*
+.pnpm-store/
