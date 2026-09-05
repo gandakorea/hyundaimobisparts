@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { readAppState, writeAppState } from "@/lib/mobis-sync-db";
 import {
+  canAccessSyncState,
   getMobisAppId,
   syncSessionCookieName,
-  verifySyncSession,
 } from "@/lib/mobis-sync-session";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 const maxPayloadBytes = 2 * 1024 * 1024;
 
 function isAuthorized(request: NextRequest, appId: string) {
-  return verifySyncSession(request.cookies.get(syncSessionCookieName)?.value, appId);
+  return canAccessSyncState(request.cookies.get(syncSessionCookieName)?.value, appId);
 }
 
 function hasMatchingOrigin(request: NextRequest) {

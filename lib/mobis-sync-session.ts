@@ -73,3 +73,8 @@ export function verifySyncSession(token: string | undefined, appId: string) {
     timingSafeEqual(receivedBuffer, expectedBuffer)
   );
 }
+
+export function canAccessSyncState(token: string | undefined, appId: string) {
+  // Opt in per deployment: enabling this allows anyone to read and edit orders.
+  return process.env.MOBIS_PUBLIC_SYNC === "true" || verifySyncSession(token, appId);
+}

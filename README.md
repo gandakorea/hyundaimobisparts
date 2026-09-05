@@ -43,6 +43,7 @@ npm run dev
 | `MOBIS_APP_ID` | 주문장별 데이터 구분 ID |
 | `MOBIS_SESSION_SECRET` | 기기 연결 세션 서명용 32자 이상 비밀값 |
 | `MOBIS_SYNC_CODE` | 새 PC/iPhone을 연결할 때 입력하는 코드 |
+| `MOBIS_PUBLIC_SYNC` | 선택 사항. `true`이면 코드 없이 누구나 주문 조회·수정 가능. 기본값은 코드 인증 |
 | `NEXT_PUBLIC_FAX_SENDER_LINE` | PNG 두 번째 줄에 표시할 발신자명과 전화번호 |
 | `OPENAI_API_KEY` | 파츠 가격 검색 보조 기능용 API 키 |
 | `OPENAI_PART_LOOKUP_MODEL` | 선택 사항인 가격 검색 모델명 |

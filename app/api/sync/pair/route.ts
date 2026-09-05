@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
+  canAccessSyncState,
   createSyncSession,
   getMobisAppId,
   isValidConnectionCode,
   syncSessionCookieName,
-  verifySyncSession,
 } from "@/lib/mobis-sync-session";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +23,7 @@ function hasMatchingOrigin(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const appId = getMobisAppId();
-  const connected = verifySyncSession(
+  const connected = canAccessSyncState(
     request.cookies.get(syncSessionCookieName)?.value,
     appId,
   );
