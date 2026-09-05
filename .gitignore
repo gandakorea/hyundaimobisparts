@@ -29,8 +29,6 @@ yarn-error.log*
 .pnpm-debug.log*
 dev-server*.log
 next-dev*.log
-AGENTS.md
-CLAUDE.md
 *.tar.gz
 
 # env files (can opt-in for committing if needed)
